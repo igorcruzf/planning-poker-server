@@ -14,6 +14,8 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
     private logger: Logger = new Logger('AppGateway');
     private users = [];
 
+    private reveal = false;
+
     handleConnection(@ConnectedSocket() client: any) {
         this.logger.log('Client connected');
     }
@@ -39,6 +41,9 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
             this.users.push([client, userInfo]);
         }
         client.emit('start', this.users.map( (user) => user[1]))
+        if(this.reveal) {
+            client.emit('startReveal', true)
+        }
         this.server.emit('login', userInfo);
     }
 
@@ -52,6 +57,7 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
     @SubscribeMessage('reveal')
     handleRevealEvent(@ConnectedSocket() client, @MessageBody() shouldReveal: boolean) {
         this.logger.log('Received reveal event:', shouldReveal);
+        this.reveal = shouldReveal
         this.server.emit('reveal', shouldReveal);
     }
     addOrUpdateField(

@@ -14,8 +14,7 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
 
     private logger: Logger = new Logger('AppGateway');
     private users = [];
-
-    private reveal = false;
+    private roomReveals: { [room: string]: boolean } = {};
 
     handleConnection(@ConnectedSocket() client: any) {
         this.logger.log('Client connected');
@@ -46,7 +45,7 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
         const usersInSameRoom = this.users.filter( (user) => user[1].room === userInfo.room ).map( (user) => user[1])
         this.logger.log('users in same room:', JSON.stringify(usersInSameRoom))
         client.emit('start', usersInSameRoom)
-        if(this.reveal) {
+        if (this.roomReveals[userInfo.room]) {
             client.emit('startReveal', true)
         }
         this.server.to(userInfo.room).emit('login', userInfo);
@@ -66,7 +65,7 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
         this.logger.log("Client with index: ", index)
         if(index !== -1) {
             const user = this.users[index][1]
-            this.reveal = shouldReveal
+            this.roomReveals[user.room] = shouldReveal;
             this.server.to(user.room).emit('reveal', shouldReveal);
         }
 

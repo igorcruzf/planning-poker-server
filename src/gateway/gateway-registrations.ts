@@ -50,12 +50,8 @@ export class GatewayRegistrations implements GatewayRegistry {
         this.serverInits.push(hook);
     }
 
-    events(): string[] {
-        return [...this.handlers.keys()];
-    }
-
-    handlerFor(event: string): GatewayEventHandler | undefined {
-        return this.handlers.get(event);
+    eventHandlers(): ReadonlyMap<string, GatewayEventHandler> {
+        return new Map(this.handlers);
     }
 
     handshakeMiddlewares(): readonly GatewayHandshakeMiddleware[] {

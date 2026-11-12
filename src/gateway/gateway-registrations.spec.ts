@@ -17,13 +17,13 @@ describe('GatewayRegistrations', () => {
         registrations.on('room:join', join);
         registrations.on('round:vote', vote);
 
-        expect(registrations.events()).toEqual(['room:join', 'round:vote']);
-        expect(registrations.handlerFor('room:join')).toBe(join);
-        expect(registrations.handlerFor('round:vote')).toBe(vote);
+        expect([...registrations.eventHandlers().keys()]).toEqual(['room:join', 'round:vote']);
+        expect(registrations.eventHandlers().get('room:join')).toBe(join);
+        expect(registrations.eventHandlers().get('round:vote')).toBe(vote);
     });
 
     it('has no handler for an event that was not registered', () => {
-        expect(registrations.handlerFor('unknown')).toBeUndefined();
+        expect(registrations.eventHandlers().get('unknown')).toBeUndefined();
     });
 
     it('rejects an event registered twice', () => {
@@ -73,7 +73,7 @@ describe('GatewayRegistrations', () => {
             contributorOf((registry) => registry.on('round:vote', vote)),
         ]);
 
-        expect(collected.events()).toEqual(['room:join', 'round:vote']);
-        expect(collected.handlerFor('round:vote')).toBe(vote);
+        expect([...collected.eventHandlers().keys()]).toEqual(['room:join', 'round:vote']);
+        expect(collected.eventHandlers().get('round:vote')).toBe(vote);
     });
 });

@@ -12,6 +12,7 @@ import { Server, Socket } from 'socket.io';
 import { corsOrigin } from './cors-origin';
 import { Departure, PlanningPokerState } from './planning-poker.state';
 import { isUserChanges, isUserInfo, toKey, UserInfo } from './user-info';
+import { hideVote } from './vote';
 
 @WebSocketGateway({ cors: { origin: corsOrigin() } })
 export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -41,11 +42,11 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
         const room = toKey(userInfo.room);
         this.joinRoom(client, room, userInfo);
-        client.emit('start', this.state.usersIn(room));
+        client.emit('start', this.visibleUsersIn(room));
         if (this.state.isRevealed(room)) {
             client.emit('startReveal', true);
         }
-        this.server.to(room).emit('login', userInfo);
+        this.server.to(room).emit('login', this.visibleUser(room, userInfo));
     }
 
     @SubscribeMessage('update')
@@ -64,7 +65,8 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
             this.logger.warn(`Update from client ${client.id} without login`);
             return;
         }
-        this.server.to(toKey(user.room)).emit('update', user);
+        const room = toKey(user.room);
+        this.server.to(room).emit('update', this.visibleUser(room, user));
     }
 
     @SubscribeMessage('reveal')
@@ -74,13 +76,22 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
             return;
         }
 
-        const room = this.state.setRevealed(client.id, shouldReveal);
+        const room = shouldReveal ? this.state.reveal(client.id) : this.state.startNewRound(client.id);
         if (room === undefined) {
             this.logger.warn(`Reveal from client ${client.id} without login`);
             return;
         }
-        this.logger.log(`Reveal set to ${shouldReveal} in room ${room}`);
+        this.logger.log(shouldReveal ? `Votes revealed in room ${room}` : `New round started in room ${room}`);
+        this.state.usersIn(room).forEach((user) => this.server.to(room).emit('update', user));
         this.server.to(room).emit('reveal', shouldReveal);
+    }
+
+    private visibleUsersIn(room: string): UserInfo[] {
+        return this.state.usersIn(room).map((user) => this.visibleUser(room, user));
+    }
+
+    private visibleUser(room: string, user: UserInfo): UserInfo {
+        return this.state.isRevealed(room) ? user : hideVote(user);
     }
 
     private joinRoom(client: Socket, room: string, userInfo: UserInfo) {
@@ -94,7 +105,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     private notifyDeparture(departure: Departure | undefined) {
         if (departure?.lastConnection) {
-            this.server.to(departure.room).emit('logout', departure.user);
+            this.server.to(departure.room).emit('logout', hideVote(departure.user));
         }
     }
 }

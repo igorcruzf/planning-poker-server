@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Identifier, toKey, UserChanges, UserInfo } from './user-info';
+import { clearVote } from './vote';
 
 interface Participant {
     user: UserInfo;
@@ -14,6 +15,12 @@ interface Room {
 interface SocketSession {
     roomKey: string;
     userKey: string;
+}
+
+interface Connection {
+    session: SocketSession;
+    room: Room;
+    participant: Participant;
 }
 
 export interface Departure {
@@ -48,32 +55,43 @@ export class PlanningPokerState {
     }
 
     update(socketId: string, changes: UserChanges): UserInfo | undefined {
-        const participant = this.findParticipant(socketId);
-        if (!participant) {
+        const connection = this.findConnection(socketId);
+        if (!connection) {
             return undefined;
         }
+        const { participant } = connection;
         participant.user = { ...changes, id: participant.user.id, room: participant.user.room };
         return participant.user;
     }
 
-    setRevealed(socketId: string, revealed: boolean): string | undefined {
-        const session = this.sessions.get(socketId);
-        if (!session) {
+    reveal(socketId: string): string | undefined {
+        const connection = this.findConnection(socketId);
+        if (!connection) {
             return undefined;
         }
-        this.rooms.get(session.roomKey).revealed = revealed;
+        connection.room.revealed = true;
+        return connection.session.roomKey;
+    }
+
+    startNewRound(socketId: string): string | undefined {
+        const connection = this.findConnection(socketId);
+        if (!connection) {
+            return undefined;
+        }
+        const { room, session } = connection;
+        room.revealed = false;
+        room.participants.forEach((participant) => (participant.user = clearVote(participant.user)));
         return session.roomKey;
     }
 
     leave(socketId: string): Departure | undefined {
-        const session = this.sessions.get(socketId);
-        if (!session) {
+        const connection = this.findConnection(socketId);
+        this.sessions.delete(socketId);
+        if (!connection) {
             return undefined;
         }
-        this.sessions.delete(socketId);
 
-        const room = this.rooms.get(session.roomKey);
-        const participant = room.participants.get(session.userKey);
+        const { session, room, participant } = connection;
         participant.socketIds.delete(socketId);
 
         const lastConnection = participant.socketIds.size === 0;
@@ -96,9 +114,11 @@ export class PlanningPokerState {
         return this.rooms.get(toKey(room))?.revealed ?? false;
     }
 
-    private findParticipant(socketId: string): Participant | undefined {
+    private findConnection(socketId: string): Connection | undefined {
         const session = this.sessions.get(socketId);
-        return session && this.rooms.get(session.roomKey).participants.get(session.userKey);
+        const room = session && this.rooms.get(session.roomKey);
+        const participant = session && room?.participants.get(session.userKey);
+        return session && room && participant ? { session, room, participant } : undefined;
     }
 
     private getOrCreateRoom(roomKey: string): Room {

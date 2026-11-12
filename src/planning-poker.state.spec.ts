@@ -32,7 +32,7 @@ describe('PlanningPokerState', () => {
         state.join('s1', { id: 'ana', room: 'A' });
         state.join('s2', { id: 'ana', room: 'A' });
 
-        expect(state.setRevealed('s2', true)).toBe('A');
+        expect(state.reveal('s2')).toBe('A');
         expect(state.isRevealed('A')).toBe(true);
     });
 
@@ -82,13 +82,30 @@ describe('PlanningPokerState', () => {
 
     it('ignores updates and reveals from sockets without login', () => {
         expect(state.update('unknown', { vote: 1 })).toBeUndefined();
-        expect(state.setRevealed('unknown', true)).toBeUndefined();
+        expect(state.reveal('unknown')).toBeUndefined();
+        expect(state.startNewRound('unknown')).toBeUndefined();
+    });
+
+    it('starts a new round clearing every vote of the room and hiding the cards', () => {
+        state.join('s1', { id: 'ana', room: 'A', votedValue: 'P' });
+        state.join('s2', { id: 'bia', room: 'A', votedValue: 'G' });
+        state.join('s3', { id: 'caio', room: 'B', votedValue: 'M' });
+        state.reveal('s1');
+
+        expect(state.startNewRound('s2')).toBe('A');
+
+        expect(state.isRevealed('A')).toBe(false);
+        expect(state.usersIn('A')).toEqual([
+            { id: 'ana', room: 'A', votedValue: '' },
+            { id: 'bia', room: 'A', votedValue: '' },
+        ]);
+        expect(state.usersIn('B')).toEqual([{ id: 'caio', room: 'B', votedValue: 'M' }]);
     });
 
     it('keeps reveal state per room and resets it once the room is empty', () => {
         state.join('s1', { id: 'ana', room: 'A' });
         state.join('s2', { id: 'bia', room: 'B' });
-        state.setRevealed('s1', true);
+        state.reveal('s1');
 
         expect(state.isRevealed('A')).toBe(true);
         expect(state.isRevealed('B')).toBe(false);

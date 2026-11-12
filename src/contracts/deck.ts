@@ -67,13 +67,16 @@ export const DECK_PRESETS: readonly DeckPreset[] = [
 
 export const DEFAULT_DECK_PRESET_ID: DeckPresetId = 'yakutsk';
 
-const presetValues = (presetId: DeckPresetId) =>
-    DECK_PRESETS.find((preset) => preset.id === presetId)?.cards.map((card) => card.value) ?? [];
+const presetCards = (presetId: DeckPresetId): readonly Readonly<Card>[] =>
+    DECK_PRESETS.find((preset) => preset.id === presetId)?.cards ?? [];
 
 const hasUniqueValues = (cards: readonly Card[]) => hasUniqueItems(cards.map((card) => card.value));
 
+const haveSameValues = (expected: readonly Readonly<Card>[], actual: readonly Card[]) =>
+    expected.length === actual.length && expected.every((card, index) => card.value === actual[index]?.value);
+
 const keepsPresetValues = ({ presetId, cards }: { presetId: DeckPresetId; cards: readonly Card[] }) =>
-    presetId === 'custom' || presetValues(presetId).join('\n') === cards.map((card) => card.value).join('\n');
+    presetId === 'custom' || haveSameValues(presetCards(presetId), cards);
 
 export const deckSchema = z
     .strictObject({
@@ -89,7 +92,7 @@ export type Deck = z.infer<typeof deckSchema>;
 
 export const DEFAULT_DECK: Deck = {
     presetId: DEFAULT_DECK_PRESET_ID,
-    cards: DECK_PRESETS[0].cards.map((card) => ({ ...card })),
+    cards: presetCards(DEFAULT_DECK_PRESET_ID).map((card) => ({ ...card })),
 };
 
 export const cardStateSchema = z.object({ value: z.string(), meaning: z.string().optional() });

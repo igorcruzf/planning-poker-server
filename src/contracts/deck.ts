@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { boundedTextSchema } from './primitives';
+import { boundedTextSchema, hasUniqueItems } from './primitives';
 
 export const CARD_VALUE_MAX_LENGTH = 4;
 export const CARD_MEANING_MAX_LENGTH = 40;
@@ -70,7 +70,7 @@ export const DEFAULT_DECK_PRESET_ID: DeckPresetId = 'yakutsk';
 const presetValues = (presetId: DeckPresetId) =>
     DECK_PRESETS.find((preset) => preset.id === presetId)?.cards.map((card) => card.value) ?? [];
 
-const hasUniqueValues = (cards: readonly Card[]) => new Set(cards.map((card) => card.value)).size === cards.length;
+const hasUniqueValues = (cards: readonly Card[]) => hasUniqueItems(cards.map((card) => card.value));
 
 const keepsPresetValues = ({ presetId, cards }: { presetId: DeckPresetId; cards: readonly Card[] }) =>
     presetId === 'custom' || presetValues(presetId).join('\n') === cards.map((card) => card.value).join('\n');

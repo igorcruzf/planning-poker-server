@@ -46,3 +46,5 @@ export const roomNameSchema = boundedTextSchema(ROOM_NAME_MAX_LENGTH);
 export type RoomName = z.infer<typeof roomNameSchema>;
 
 export const httpUrlSchema = z.url({ protocol: /^https?$/ });
+
+export const hasUniqueItems = (items: readonly unknown[]) => new Set(items).size === items.length;

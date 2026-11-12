@@ -8,6 +8,10 @@ export type SecretToken = z.infer<typeof secretTokenSchema>;
 export const sessionTokenSchema = secretTokenSchema;
 export type SessionToken = z.infer<typeof sessionTokenSchema>;
 
+export const emptyPayloadSchema = z.strictObject({});
+export type EmptyPayload = z.infer<typeof emptyPayloadSchema>;
+
+export const ROOM_LINK_QUERY_PARAM = 'mesa';
 export const ROOM_CODE_PREFIX = 'yak-';
 export const ROOM_CODE_SUFFIX_LENGTH = 8;
 export const ROOM_CODE_SUFFIX_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';

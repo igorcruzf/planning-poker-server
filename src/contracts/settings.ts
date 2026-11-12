@@ -1,16 +1,15 @@
 import { z } from 'zod';
-import { DEFAULT_DECK, deckSchema, deckStateSchema, SPECIAL_CARDS, specialCardSchema, type SpecialCard } from './deck';
+import { DEFAULT_DECK, deckSchema, deckStateSchema, SPECIAL_CARDS, specialCardSchema } from './deck';
+import { hasUniqueItems } from './primitives';
 
 export const COUNTDOWN_SECONDS_OPTIONS = [0, 3, 5] as const;
 export const countdownSecondsSchema = z.literal(COUNTDOWN_SECONDS_OPTIONS);
 export type CountdownSeconds = z.infer<typeof countdownSecondsSchema>;
 
-const hasUniqueSpecialCards = (cards: readonly SpecialCard[]) => new Set(cards).size === cards.length;
-
 export const specialCardsSettingSchema = z
     .array(specialCardSchema)
     .max(SPECIAL_CARDS.length)
-    .refine(hasUniqueSpecialCards, { message: 'Special cards must be unique' });
+    .refine(hasUniqueItems, { message: 'Special cards must be unique' });
 
 const roomSettingsFields = {
     deck: deckSchema,

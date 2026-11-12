@@ -27,6 +27,9 @@ const CLIENT_EVENT_SAMPLES: { [E in ClientEventName]: ClientEventPayload<E> } = 
     'round:reveal': { roundId: 1, confirmMissingVotes: true },
     'round:reset': { roundId: 1 },
     'round:finalize': { roundId: 1, value: 'M' },
+    'fun:throw': { targetId: 'p-bruno' },
+    'fun:umbrella': { enabled: true },
+    'roulette:spin': { mode: 'leader', names: ['Ana', 'Bruno'], absent: ['Bruno'], alreadyDrawn: [] },
 };
 
 const OTHER_RECEIVED_PAYLOADS: [string, z.ZodType, Record<string, unknown>][] = [

@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { type AckCallback, noResultSchema } from './ack';
+import { funThrownSchema, funThrowPayloadSchema, funUmbrellaPayloadSchema } from './fun';
 import { emptyPayloadSchema } from './primitives';
 import {
     roomCreatePayloadSchema,
@@ -16,6 +17,7 @@ import {
     roundRevealPayloadSchema,
     roundVotePayloadSchema,
 } from './round';
+import { rouletteSpinPayloadSchema, rouletteSpunSchema } from './roulette';
 
 export const EVENT_AREAS = ['room', 'round', 'roulette', 'fun', 'jira', 'kiro'] as const;
 export type EventArea = (typeof EVENT_AREAS)[number];
@@ -34,6 +36,9 @@ export const CLIENT_EVENTS = {
     'round:reveal': { payload: roundRevealPayloadSchema, result: noResultSchema },
     'round:reset': { payload: roundResetPayloadSchema, result: noResultSchema },
     'round:finalize': { payload: roundFinalizePayloadSchema, result: noResultSchema },
+    'fun:throw': { payload: funThrowPayloadSchema, result: noResultSchema },
+    'fun:umbrella': { payload: funUmbrellaPayloadSchema, result: noResultSchema },
+    'roulette:spin': { payload: rouletteSpinPayloadSchema, result: noResultSchema },
 } as const satisfies Record<EventName, ClientEventContract>;
 
 export type ClientEventName = keyof typeof CLIENT_EVENTS;
@@ -43,6 +48,8 @@ export type ClientEventResult<E extends ClientEventName> = z.output<(typeof CLIE
 
 export const SERVER_EVENTS = {
     'room:state': roomStateSchema,
+    'fun:thrown': funThrownSchema,
+    'roulette:spun': rouletteSpunSchema,
 } as const satisfies Record<EventName, z.ZodType>;
 
 export type ServerEventName = keyof typeof SERVER_EVENTS;

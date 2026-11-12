@@ -1,87 +1,100 @@
-import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, MessageBody, ConnectedSocket} from '@nestjs/websockets';
-import {Logger} from "@nestjs/common";
-import {Socket} from "socket.io";
+import {
+    ConnectedSocket,
+    MessageBody,
+    OnGatewayConnection,
+    OnGatewayDisconnect,
+    SubscribeMessage,
+    WebSocketGateway,
+    WebSocketServer,
+} from '@nestjs/websockets';
+import { Logger } from '@nestjs/common';
+import { Server, Socket } from 'socket.io';
+import { corsOrigin } from './cors-origin';
+import { Departure, PlanningPokerState } from './planning-poker.state';
+import { isUserChanges, isUserInfo, toKey, UserInfo } from './user-info';
 
-@WebSocketGateway( {
-    cors: {
-        origin: '*',
-    },
-})
-export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
-
+@WebSocketGateway({ cors: { origin: corsOrigin() } })
+export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @WebSocketServer()
-    server;
+    private readonly server: Server;
 
-    private logger: Logger = new Logger('AppGateway');
-    private users = [];
-    private roomReveals: { [room: string]: boolean } = {};
+    private readonly logger = new Logger(AppGateway.name);
 
-    handleConnection(@ConnectedSocket() client: any) {
-        this.logger.log('Client connected');
+    constructor(private readonly state: PlanningPokerState) {}
+
+    handleConnection(client: Socket) {
+        this.logger.log(`Client connected: ${client.id}`);
     }
 
-    handleDisconnect(@ConnectedSocket() client: any) {
-        this.logger.log('Client disconnected');
-        const index = this.users.findIndex((f) => client === f[0]);
-        this.logger.log("Client with index: ", index)
-        if(index !== -1) {
-            const user = this.users[index][1]
-            this.server.to(user.room).emit('logout', user)
-            this.users = [...this.users.slice(0, index), ...this.users.slice(index + 1)];
-        }
-    }
-
-    afterInit(server: any): any {
-        this.logger.log('init');
+    handleDisconnect(client: Socket) {
+        this.logger.log(`Client disconnected: ${client.id}`);
+        this.notifyDeparture(this.state.leave(client.id));
     }
 
     @SubscribeMessage('login')
-    handleLoginEvent(@ConnectedSocket() client: Socket, @MessageBody() userInfo: any) {
-        client.join(userInfo.room)
-        this.logger.log('Received login:', JSON.stringify(userInfo));
-        if(this.users.filter( (user) => user[1].id === userInfo.id).length === 0) {
-            this.users.push([client, userInfo]);
+    handleLoginEvent(@ConnectedSocket() client: Socket, @MessageBody() userInfo: unknown) {
+        if (!isUserInfo(userInfo)) {
+            this.logger.warn(`Invalid login payload from ${client.id}`);
+            return;
         }
-        const usersInSameRoom = this.users.filter( (user) => user[1].room === userInfo.room ).map( (user) => user[1])
-        this.logger.log('users in same room:', JSON.stringify(usersInSameRoom))
-        client.emit('start', usersInSameRoom)
-        if (this.roomReveals[userInfo.room]) {
-            client.emit('startReveal', true)
+        this.logger.log(`Login of user ${userInfo.id} in room ${userInfo.room}`);
+
+        const room = toKey(userInfo.room);
+        this.joinRoom(client, room, userInfo);
+        client.emit('start', this.state.usersIn(room));
+        if (this.state.isRevealed(room)) {
+            client.emit('startReveal', true);
         }
-        this.server.to(userInfo.room).emit('login', userInfo);
+        this.server.to(room).emit('login', userInfo);
     }
 
     @SubscribeMessage('update')
-    handleUpdateEvent(@ConnectedSocket() client, @MessageBody() userInfo: any) {
-        this.logger.log('Received update:', JSON.stringify(userInfo));
-        this.users = this.addOrUpdateField(client, userInfo)
-        this.server.to(userInfo.room).emit('update', userInfo);
+    handleUpdateEvent(@ConnectedSocket() client: Socket, @MessageBody() changes: unknown) {
+        if (!isUserChanges(changes)) {
+            this.logger.warn(`Invalid update payload from ${client.id}`);
+            return;
+        }
+
+        let user = this.state.update(client.id, changes);
+        if (!user && isUserInfo(changes)) {
+            this.joinRoom(client, toKey(changes.room), changes);
+            user = changes;
+        }
+        if (!user) {
+            this.logger.warn(`Update from client ${client.id} without login`);
+            return;
+        }
+        this.server.to(toKey(user.room)).emit('update', user);
     }
 
     @SubscribeMessage('reveal')
-    handleRevealEvent(@ConnectedSocket() client, @MessageBody() shouldReveal: boolean) {
-        this.logger.log('Received reveal event:', shouldReveal);
-        const index = this.users.findIndex((f) => client === f[0]);
-        this.logger.log("Client with index: ", index)
-        if(index !== -1) {
-            const user = this.users[index][1]
-            this.roomReveals[user.room] = shouldReveal;
-            this.server.to(user.room).emit('reveal', shouldReveal);
+    handleRevealEvent(@ConnectedSocket() client: Socket, @MessageBody() shouldReveal: unknown) {
+        if (typeof shouldReveal !== 'boolean') {
+            this.logger.warn(`Invalid reveal payload from ${client.id}`);
+            return;
         }
 
+        const room = this.state.setRevealed(client.id, shouldReveal);
+        if (room === undefined) {
+            this.logger.warn(`Reveal from client ${client.id} without login`);
+            return;
+        }
+        this.logger.log(`Reveal set to ${shouldReveal} in room ${room}`);
+        this.server.to(room).emit('reveal', shouldReveal);
     }
-    addOrUpdateField(
-        client: any,
-        userInfo: any
-    ): any[] {
-        const index = this.users.findIndex((f) => userInfo.id === f[1].id);
 
-        if (-1 === index) {
-            return [...(this.users), [client, userInfo]];
+    private joinRoom(client: Socket, room: string, userInfo: UserInfo) {
+        const departure = this.state.join(client.id, userInfo);
+        if (departure && departure.room !== room) {
+            client.leave(departure.room);
         }
+        this.notifyDeparture(departure);
+        client.join(room);
+    }
 
-        return [...this.users.slice(0, index), [client, userInfo], ...this.users.slice(index + 1)];
+    private notifyDeparture(departure: Departure | undefined) {
+        if (departure?.lastConnection) {
+            this.server.to(departure.room).emit('logout', departure.user);
+        }
     }
 }
-
-

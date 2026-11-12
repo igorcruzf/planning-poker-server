@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { type AckCallback, noResultSchema } from './ack';
 import { funThrownSchema, funThrowPayloadSchema, funUmbrellaPayloadSchema } from './fun';
+import { kiroInviteSchema } from './kiro';
 import { emptyPayloadSchema } from './primitives';
 import {
     roomCreatePayloadSchema,
@@ -39,6 +40,7 @@ export const CLIENT_EVENTS = {
     'fun:throw': { payload: funThrowPayloadSchema, result: noResultSchema },
     'fun:umbrella': { payload: funUmbrellaPayloadSchema, result: noResultSchema },
     'roulette:spin': { payload: rouletteSpinPayloadSchema, result: noResultSchema },
+    'kiro:invite': { payload: emptyPayloadSchema, result: kiroInviteSchema },
 } as const satisfies Record<EventName, ClientEventContract>;
 
 export type ClientEventName = keyof typeof CLIENT_EVENTS;

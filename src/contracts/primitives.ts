@@ -34,10 +34,15 @@ export const durationMsSchema = z.number().int().nonnegative();
 
 export const PERSON_NAME_MAX_LENGTH = 30;
 export const ROOM_NAME_MAX_LENGTH = 30;
-const WITHOUT_CONTROL_CHARACTERS = /^\P{Cc}*$/u;
+const CONTROL_CHARACTER = /\p{Cc}/u;
 
 export const boundedTextSchema = (maxLength: number) =>
-    z.string().trim().min(1).max(maxLength).regex(WITHOUT_CONTROL_CHARACTERS);
+    z
+        .string()
+        .trim()
+        .min(1)
+        .max(maxLength)
+        .refine((text) => !CONTROL_CHARACTER.test(text), { message: 'Control characters are not allowed' });
 
 export const personNameSchema = boundedTextSchema(PERSON_NAME_MAX_LENGTH);
 export type PersonName = z.infer<typeof personNameSchema>;

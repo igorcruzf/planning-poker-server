@@ -59,14 +59,15 @@ export const roundStateSchema = z.discriminatedUnion('phase', [
 ]);
 export type RoundState = z.infer<typeof roundStateSchema>;
 
-const namedValueSchema = z.object({ name: z.string(), value: z.string() });
+export const namedVoteSchema = z.object({ name: z.string(), value: z.string() });
+export type NamedVote = z.infer<typeof namedVoteSchema>;
 
 export const historyEntrySchema = z.object({
     roundId: roundIdSchema,
     issue: z.object({ key: z.string(), summary: z.string() }).nullable(),
     finalEstimate: cardStateSchema.nullable(),
-    votes: z.array(namedValueSchema),
-    kiroGuesses: z.array(namedValueSchema),
+    votes: z.array(namedVoteSchema),
+    kiroGuesses: z.array(namedVoteSchema),
     kiroCountedAsPlayer: z.boolean(),
     revealedAt: timestampSchema,
 });

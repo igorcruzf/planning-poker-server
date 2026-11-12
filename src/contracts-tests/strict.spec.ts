@@ -11,6 +11,9 @@ import {
     jiraRoomPathParamsSchema,
     jiraSaveSizeRequestSchema,
     jiraSessionRequestSchema,
+    KIRO_TOOL_NAMES,
+    KIRO_TOOLS,
+    type KiroToolName,
 } from '../contracts';
 
 const TOKEN = 'K'.repeat(43);
@@ -30,6 +33,15 @@ const CLIENT_EVENT_SAMPLES: { [E in ClientEventName]: ClientEventPayload<E> } = 
     'fun:throw': { targetId: 'p-bruno' },
     'fun:umbrella': { enabled: true },
     'roulette:spin': { mode: 'leader', names: ['Ana', 'Bruno'], absent: ['Bruno'], alreadyDrawn: [] },
+    'kiro:invite': {},
+};
+
+const KIRO_TOOL_SAMPLES: { [T in KiroToolName]: z.input<(typeof KIRO_TOOLS)[T]['input']> } = {
+    join_table: { invite: TOKEN },
+    get_round: {},
+    wait_for_round: { timeout_s: 30 },
+    cast_vote: { value: 'G', rationale: 'Parece maior que 10 dias.' },
+    leave_table: {},
 };
 
 const OTHER_RECEIVED_PAYLOADS: [string, z.ZodType, Record<string, unknown>][] = [
@@ -92,6 +104,20 @@ describe('strict client to server payloads', () => {
         expect(schema.safeParse(sample).success).toBe(true);
         expect(schema.safeParse({ ...sample, unknownField: true }).success).toBe(false);
     });
+
+    it('has a sample for every Kiro tool', () => {
+        expect(Object.keys(KIRO_TOOL_SAMPLES).sort()).toEqual([...KIRO_TOOL_NAMES].sort());
+    });
+
+    it.each(Object.entries(KIRO_TOOL_SAMPLES))(
+        'MCP tool %s accepts the sample and rejects it with an unknown field',
+        (tool, sample) => {
+            const { input } = KIRO_TOOLS[tool as KiroToolName];
+
+            expect(input.safeParse(sample).success).toBe(true);
+            expect(input.safeParse({ ...sample, unknownField: true }).success).toBe(false);
+        },
+    );
 
     it.each(NESTED_UNKNOWN_FIELDS)('%s rejects an unknown nested field', (_name, schema, valid, invalid) => {
         expect(schema.safeParse(valid).success).toBe(true);

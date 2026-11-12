@@ -4,6 +4,7 @@ export * from './errors';
 export * from './events';
 export * from './fun';
 export * from './jira';
+export * from './kiro';
 export * from './primitives';
 export * from './protocol';
 export * from './room';

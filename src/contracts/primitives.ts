@@ -32,13 +32,13 @@ export const PERSON_NAME_MAX_LENGTH = 30;
 export const ROOM_NAME_MAX_LENGTH = 30;
 const WITHOUT_CONTROL_CHARACTERS = /^\P{Cc}*$/u;
 
-const displayNameSchema = (maxLength: number) =>
+export const boundedTextSchema = (maxLength: number) =>
     z.string().trim().min(1).max(maxLength).regex(WITHOUT_CONTROL_CHARACTERS);
 
-export const personNameSchema = displayNameSchema(PERSON_NAME_MAX_LENGTH);
+export const personNameSchema = boundedTextSchema(PERSON_NAME_MAX_LENGTH);
 export type PersonName = z.infer<typeof personNameSchema>;
 
-export const roomNameSchema = displayNameSchema(ROOM_NAME_MAX_LENGTH);
+export const roomNameSchema = boundedTextSchema(ROOM_NAME_MAX_LENGTH);
 export type RoomName = z.infer<typeof roomNameSchema>;
 
 export const httpUrlSchema = z.url({ protocol: /^https?$/ });

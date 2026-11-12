@@ -15,7 +15,10 @@ export const ROOM_LINK_QUERY_PARAM = 'mesa';
 export const ROOM_CODE_PREFIX = 'yak-';
 export const ROOM_CODE_SUFFIX_LENGTH = 8;
 export const ROOM_CODE_SUFFIX_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
-export const ROOM_CODE_PATTERN = /^yak-[a-z0-9]{4,16}$/;
+const ROOM_CODE_ACCEPTED_SUFFIX_LENGTH = { min: 4, max: 16 };
+export const ROOM_CODE_PATTERN = new RegExp(
+    `^${ROOM_CODE_PREFIX}[a-z0-9]{${ROOM_CODE_ACCEPTED_SUFFIX_LENGTH.min},${ROOM_CODE_ACCEPTED_SUFFIX_LENGTH.max}}$`,
+);
 export const roomCodeSchema = z.string().trim().toLowerCase().regex(ROOM_CODE_PATTERN);
 export type RoomCode = z.infer<typeof roomCodeSchema>;
 

@@ -12,7 +12,7 @@ import {
     jiraSessionResponseSchema,
 } from '../../contracts';
 import { AppModule } from '../../app.module';
-import { MAX_PENDING_LOGINS } from './jira-login.service';
+import { JiraLoginService, MAX_PENDING_LOGINS } from './jira-login.service';
 import { jiraAuthModuleMetadata, JiraAuthModule } from './jira-auth.module';
 import { JiraSessionService } from './jira-session.service';
 import { JiraAuthConfig } from './jira-auth.config';
@@ -163,12 +163,16 @@ describe('Jira auth endpoints', () => {
 
         it('refuses new logins with 429 when too many are pending', async () => {
             await start();
+            const login = app.get(JiraLoginService);
             for (let index = 0; index < MAX_PENDING_LOGINS; index += 1) {
-                expect((await get('/api/auth/jira/login')).status).toBe(302);
+                login.beginLogin();
             }
             const response = await get('/api/auth/jira/login');
             expect(response.status).toBe(429);
             expect(httpErrorBodySchema.parse(await response.json()).error.code).toBe('rate_limited');
+            now += JIRA_OAUTH_STATE_TTL_MS;
+            login.sweep();
+            expect((await get('/api/auth/jira/login')).status).toBe(302);
         });
     });
 

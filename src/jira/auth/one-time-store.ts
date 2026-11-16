@@ -23,7 +23,9 @@ export class OneTimeStore<T> {
     }
 
     put(value: T): string | undefined {
-        this.sweep();
+        if (this.entries.size >= this.options.maxEntries) {
+            this.sweep();
+        }
         if (this.entries.size >= this.options.maxEntries) {
             return undefined;
         }

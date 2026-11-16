@@ -67,7 +67,6 @@ describe('Kiro seats', () => {
             role: 'bot',
             ownerId: owner.id,
             presence: 'connected',
-            tokenHash: null,
         });
     });
 

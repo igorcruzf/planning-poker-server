@@ -21,7 +21,15 @@ import { Clock } from './clock';
 import { findDeckCard, isVoteAllowed } from './deck-rules';
 import { DomainError, domainErrors } from './domain-error';
 import { KiroInviteBook } from './kiro-invite-book';
-import { isHuman, isPlayer, normalizeName, Participant } from './participant';
+import {
+    isHuman,
+    isPlayer,
+    isReservedForKiro,
+    normalizeName,
+    Participant,
+    ParticipantView,
+    toParticipantView,
+} from './participant';
 import { generateSecret, hashSecret, secretMatchesHash } from './secrets';
 
 export interface RoomDependencies {
@@ -36,6 +44,11 @@ export type RevealRequest = RoundTarget & { confirmMissingVotes: boolean };
 export type VoteRequest = RoundTarget & { value: string | null };
 export type FinalizeRequest = RoundTarget & { value: string };
 export type PhaseOutcome = { phase: RoundPhase };
+export type KiroVoteOutcome = PhaseOutcome & { roundId: number };
+
+export const HISTORY_MAX_ENTRIES = 200;
+
+const sameContent = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 
 const PARTICIPANT_ID_BYTES = 9;
 const PARTICIPANT_ID_PREFIX = 'p-';
@@ -72,11 +85,11 @@ export class Room {
     }
 
     get settings(): RoomSettings {
-        return this._settings;
+        return structuredClone(this._settings);
     }
 
-    get participants(): readonly Participant[] {
-        return this.roster;
+    get participants(): readonly ParticipantView[] {
+        return this.roster.map(toParticipantView);
     }
 
     get facilitatorId(): string | null {
@@ -123,19 +136,19 @@ export class Room {
         return this._emptiedAt !== null && now - this._emptiedAt >= ROOM_IDLE_TTL_MS;
     }
 
-    findParticipant(participantId: string): Participant | undefined {
-        return this.roster.find((participant) => participant.id === participantId);
+    findParticipant(participantId: string): ParticipantView | undefined {
+        const seat = this.findSeat(participantId);
+        return seat && toParticipantView(seat);
     }
 
-    requireParticipant(participantId: string): Participant {
-        const participant = this.findParticipant(participantId);
-        if (!participant) throw domainErrors.forbidden('not_in_room');
-        return participant;
+    requireParticipant(participantId: string): ParticipantView {
+        return toParticipantView(this.requireSeat(participantId));
     }
 
     join(request: JoinRequest): { participantId: string; sessionToken: string } {
         if (request.sessionToken !== undefined) return this.reconnect(request.sessionToken);
         if (request.role === 'spectator' && !this._settings.allowSpectators) throw domainErrors.spectatorsDisabled();
+        if (isReservedForKiro(request.name)) throw domainErrors.nameTaken();
         this.assertNameAvailable(request.name);
         const sessionToken = generateSecret();
         const participant = this.seat({ name: request.name, role: request.role, tokenHash: hashSecret(sessionToken) });
@@ -145,7 +158,7 @@ export class Room {
     }
 
     markConnected(participantId: string): void {
-        const participant = this.requireParticipant(participantId);
+        const participant = this.requireSeat(participantId);
         participant.presence = 'connected';
         participant.disconnectedAt = null;
         this.refreshOccupancy();
@@ -153,7 +166,7 @@ export class Room {
     }
 
     markDisconnected(participantId: string): void {
-        const participant = this.requireParticipant(participantId);
+        const participant = this.requireSeat(participantId);
         if (participant.presence === 'disconnected') return;
         participant.presence = 'disconnected';
         participant.disconnectedAt = this.dependencies.clock.now();
@@ -162,7 +175,7 @@ export class Room {
     }
 
     leave(participantId: string): void {
-        const leaving = this.requireParticipant(participantId);
+        const leaving = this.requireSeat(participantId);
         this.removeParticipant(leaving);
         if (isHuman(leaving)) {
             this.roster.filter((seat) => seat.ownerId === leaving.id).forEach((seat) => this.removeParticipant(seat));
@@ -176,6 +189,7 @@ export class Room {
     setRole(participantId: string, role: HumanRole): void {
         const participant = this.requireHuman(participantId);
         if (participant.role === role) return;
+        this.assertPhase('voting');
         if (role === 'spectator' && !this._settings.allowSpectators) throw domainErrors.spectatorsDisabled();
         participant.role = role;
         if (role === 'spectator') participant.vote = null;
@@ -184,7 +198,7 @@ export class Room {
 
     transferFacilitator(actorId: string, targetId: string): void {
         this.requireFacilitator(actorId);
-        const target = this.findParticipant(targetId);
+        const target = this.findSeat(targetId);
         if (!target || !isHuman(target)) throw domainErrors.invalidTarget();
         this._facilitatorId = target.id;
     }
@@ -193,6 +207,7 @@ export class Room {
         this.requireFacilitator(actorId);
         const parsed = roomSettingsPatchSchema.safeParse(patch);
         if (!parsed.success) throw this.invalidSettings();
+        if (this.changesCards(parsed.data)) this.assertPhase('voting');
         this._settings = { ...this._settings, ...structuredClone(parsed.data) };
         this.roster
             .filter((participant) => participant.vote !== null && !isVoteAllowed(this._settings, participant.vote))
@@ -294,7 +309,7 @@ export class Room {
 
     redeemKiroInvite(inviteCode: string): { participantId: string; seatName: string } {
         const ownerId = this.invites.ownerOf(inviteCode, this.dependencies.clock.now());
-        const owner = ownerId === null ? undefined : this.findParticipant(ownerId);
+        const owner = ownerId === null ? undefined : this.findSeat(ownerId);
         if (!owner) throw domainErrors.inviteInvalid();
         if (!this._settings.allowKiro) throw domainErrors.kiroDisabled();
         this.assertKiroSeatAvailable(owner.id);
@@ -305,8 +320,8 @@ export class Room {
         return { participantId: seat.id, seatName };
     }
 
-    castKiroVote(botId: string, request: { value: string; rationale: string }): PhaseOutcome {
-        const bot = this.findParticipant(botId);
+    castKiroVote(botId: string, request: { value: string; rationale: string }): KiroVoteOutcome {
+        const bot = this.findSeat(botId);
         if (!bot || bot.role !== 'bot') throw domainErrors.forbidden('not_in_room');
         this.assertPhase('voting');
         if (!isVoteAllowed(this._settings, request.value)) throw domainErrors.invalidVote();
@@ -314,7 +329,7 @@ export class Room {
         if (rationale.length === 0 || rationale.length > KIRO_RATIONALE_MAX_LENGTH) throw this.invalidRationale();
         bot.vote = request.value;
         bot.rationale = rationale;
-        return { phase: this._phase };
+        return { phase: this._phase, roundId: this._roundId };
     }
 
     private reconnect(sessionToken: string): { participantId: string; sessionToken: string } {
@@ -343,6 +358,16 @@ export class Room {
         return participant;
     }
 
+    private findSeat(participantId: string): Participant | undefined {
+        return this.roster.find((participant) => participant.id === participantId);
+    }
+
+    private requireSeat(participantId: string): Participant {
+        const participant = this.findSeat(participantId);
+        if (!participant) throw domainErrors.forbidden('not_in_room');
+        return participant;
+    }
+
     private removeParticipant(participant: Participant): void {
         this.roster.splice(this.roster.indexOf(participant), 1);
     }
@@ -363,19 +388,19 @@ export class Room {
     }
 
     private requireHuman(participantId: string): Participant {
-        const participant = this.requireParticipant(participantId);
+        const participant = this.requireSeat(participantId);
         if (!isHuman(participant)) throw domainErrors.forbidden('not_in_room');
         return participant;
     }
 
     private requirePlayer(participantId: string): Participant {
-        const participant = this.requireParticipant(participantId);
+        const participant = this.requireSeat(participantId);
         if (!isPlayer(participant)) throw domainErrors.forbidden('players_only');
         return participant;
     }
 
     private requireFacilitator(participantId: string): void {
-        this.requireParticipant(participantId);
+        this.requireSeat(participantId);
         if (participantId !== this._facilitatorId) throw domainErrors.forbidden('facilitator_only');
     }
 
@@ -397,8 +422,16 @@ export class Room {
     private namedParticipants(participantIds: string[]) {
         return participantIds.map((participantId) => ({
             participantId,
-            name: this.requireParticipant(participantId).name,
+            name: this.requireSeat(participantId).name,
         }));
+    }
+
+    private changesCards(patch: RoomSettingsPatch): boolean {
+        const { deck, specialCards } = this._settings;
+        return (
+            (patch.deck !== undefined && !sameContent(patch.deck, deck)) ||
+            (patch.specialCards !== undefined && !sameContent(patch.specialCards, specialCards))
+        );
     }
 
     private settleAutoReveal(): void {
@@ -419,7 +452,7 @@ export class Room {
         this._phase = 'revealed';
         this._countdown = null;
         this._revealedAt = this.dependencies.clock.now();
-        this._history = [...this._history, this.historyEntry(this._revealedAt)];
+        this._history = [...this._history, this.historyEntry(this._revealedAt)].slice(-HISTORY_MAX_ENTRIES);
         return { phase: this._phase };
     }
 

@@ -194,7 +194,10 @@ describe('Reveal rules (D8)', () => {
     it('does not auto reveal when only the Kiro voted', () => {
         const { room, kiroId } = withKiro();
         room.updateSettings(room.facilitatorId!, { autoReveal: true });
-        expect(room.castKiroVote(kiroId, { value: 'P', rationale: 'Parece pequeno' })).toEqual({ phase: 'voting' });
+        expect(room.castKiroVote(kiroId, { value: 'P', rationale: 'Parece pequeno' })).toEqual({
+            phase: 'voting',
+            roundId: 1,
+        });
     });
 });
 

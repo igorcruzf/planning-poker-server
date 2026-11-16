@@ -8,7 +8,11 @@ import {
     RoomState,
 } from '../contracts';
 import { domainErrors } from './domain-error';
-import { CurrentIssue, FinalizeRequest, PhaseOutcome, RevealRequest, Room, RoundTarget, VoteRequest } from './room';
+import {
+    CurrentIssue,
+    FinalizeRequest,
+    KiroVoteOutcome,
+    PhaseOutcome, RevealRequest, Room, RoundTarget, VoteRequest } from './room';
 import { RoomRepository } from './room.repository';
 import { snapshotFor } from './snapshot';
 
@@ -102,7 +106,7 @@ export class RoomService {
         return { roomCode: room.code, roomName: room.name, participantId, seatName };
     }
 
-    castKiroVote(roomCode: string, botId: string, request: { value: string; rationale: string }): PhaseOutcome {
+    castKiroVote(roomCode: string, botId: string, request: { value: string; rationale: string }): KiroVoteOutcome {
         return this.rooms.require(roomCode).castKiroVote(botId, request);
     }
 }

@@ -39,13 +39,19 @@ export const PERSON_NAME_MAX_LENGTH = 30;
 export const ROOM_NAME_MAX_LENGTH = 30;
 const FORBIDDEN_CHARACTER = /(?![\u200C\u200D])[\p{Cc}\p{Cf}]/u;
 
+const INVISIBLE_CODE_POINTS = new Set([0x200c, 0x200d, 0x3164, 0x2800, 0x115f, 0x1160, 0x17b4, 0x17b5, 0xffa0]);
+const WHITESPACE = /\s/u;
+const hasVisibleCharacter = (text: string) =>
+    [...text].some((character) => !WHITESPACE.test(character) && !INVISIBLE_CODE_POINTS.has(character.codePointAt(0)!));
+
 export const boundedTextSchema = (maxLength: number) =>
     z
         .string()
         .trim()
         .min(1)
         .max(maxLength)
-        .refine((text) => !FORBIDDEN_CHARACTER.test(text), { message: 'Control and formatting characters are not allowed' });
+        .refine((text) => !FORBIDDEN_CHARACTER.test(text), { message: 'Control and formatting characters are not allowed' })
+        .refine(hasVisibleCharacter, { message: 'At least one visible character is required' });
 
 export const personNameSchema = boundedTextSchema(PERSON_NAME_MAX_LENGTH);
 export type PersonName = z.infer<typeof personNameSchema>;
@@ -54,6 +60,7 @@ export const roomNameSchema = boundedTextSchema(ROOM_NAME_MAX_LENGTH);
 export type RoomName = z.infer<typeof roomNameSchema>;
 
 const hasNoCredentials = (url: string) => {
+    if (!URL.canParse(url)) return false;
     const { username, password } = new URL(url);
     return !username && !password;
 };

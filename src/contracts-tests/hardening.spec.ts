@@ -12,6 +12,7 @@ import {
     JIRA_SUMMARY_MAX_LENGTH,
     jiraAgendaRequestSchema,
     jiraIssueSchema,
+    jiraIssueSummarySchema,
     jiraSessionResponseSchema,
     personNameSchema,
     roomCreatePayloadSchema,
@@ -127,6 +128,23 @@ describe('nome de pessoa sem caracteres de formatação', () => {
         expect(personNameSchema.safeParse(name).success).toBe(true);
     });
 
+    it.each([
+        ['\u200D'],
+        ['\u200C'],
+        ['\u3164'],
+        ['\u2800'],
+        ['\u115F\u1160'],
+        ['\u17B4\u17B5'],
+        ['\uFFA0'],
+        [' \u200D\u200C\u3164\u2800 '],
+    ])('rejeita nome sem caractere visível %j', (name) => {
+        expect(personNameSchema.safeParse(name).success).toBe(false);
+    });
+
+    it('aceita nome com caractere visível junto de invisíveis', () => {
+        expect(personNameSchema.safeParse('A\u3164').success).toBe(true);
+    });
+
     it('mantém nomes comuns com acento', () => {
         expect(personNameSchema.parse('  Júlia  ')).toBe('Júlia');
     });
@@ -136,6 +154,13 @@ describe('url sem credenciais', () => {
     it.each([['https://user:senha@acme.atlassian.net'], ['http://x@y.com/']])('rejeita %s', (url) => {
         expect(httpUrlSchema.safeParse(url).success).toBe(false);
         expect(jiraSessionResponseSchema.safeParse({ siteUrl: url }).success).toBe(false);
+    });
+
+    it.each([['//x'], ['not a url'], ['http://[::1']])('devolve falha de parse, sem lançar, para %s', (url) => {
+        expect(() => httpUrlSchema.safeParse(url)).not.toThrow();
+        expect(httpUrlSchema.safeParse(url).success).toBe(false);
+        expect(jiraSessionResponseSchema.safeParse({ siteUrl: url }).success).toBe(false);
+        expect(jiraIssueSummarySchema.safeParse({ url }).success).toBe(false);
     });
 
     it('aceita url normal', () => {

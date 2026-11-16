@@ -1,7 +1,8 @@
 import { Server, Socket } from 'socket.io';
-import { AppGateway } from './app.gateway';
-import { PlanningPokerState } from './planning-poker.state';
-import { HIDDEN_VOTE } from './vote';
+import { PlanningPokerState } from '../../../planning-poker.state';
+import { HIDDEN_VOTE } from '../../../vote';
+import { GatewayRegistrations } from '../../gateway-registrations';
+import { LegacyHandlers } from './legacy.handlers';
 
 interface Emission {
     room: string;
@@ -24,14 +25,32 @@ const createSocket = (id: string) =>
         leave: jest.fn(),
     } as unknown as Socket & { emit: jest.Mock; join: jest.Mock; leave: jest.Mock });
 
-describe('AppGateway', () => {
+const mountLegacyArea = (emissions: Emission[]) => {
+    const registrations = GatewayRegistrations.collect([new LegacyHandlers(new PlanningPokerState())]);
+    const server = createServer(emissions);
+    const send = (socket: Socket, event: string, payload: unknown) => {
+        const handler = registrations.eventHandlers().get(event);
+        if (!handler) {
+            throw new Error(`The legacy area has no handler for "${event}"`);
+        }
+        return handler(payload, { socket, server });
+    };
+    const disconnect = (socket: Socket) =>
+        registrations.disconnectHooks().forEach((hook) => hook({ socket, server }));
+    return { registrations, send, disconnect };
+};
+
+describe('LegacyHandlers', () => {
     let emissions: Emission[];
-    let gateway: AppGateway;
+    let legacy: ReturnType<typeof mountLegacyArea>;
 
     beforeEach(() => {
         emissions = [];
-        gateway = new AppGateway(new PlanningPokerState());
-        Object.assign(gateway, { server: createServer(emissions) });
+        legacy = mountLegacyArea(emissions);
+    });
+
+    it('registers exactly the legacy events login, update and reveal', () => {
+        expect([...legacy.registrations.eventHandlers().keys()]).toEqual(['login', 'update', 'reveal']);
     });
 
     describe('login', () => {
@@ -39,7 +58,7 @@ describe('AppGateway', () => {
             const socket = createSocket('s1');
             const user = { id: 'ana', room: 'A' };
 
-            gateway.handleLoginEvent(socket, user);
+            legacy.send(socket, 'login', user);
 
             expect(socket.join).toHaveBeenCalledWith('A');
             expect(socket.emit).toHaveBeenCalledWith('start', [user]);
@@ -49,11 +68,11 @@ describe('AppGateway', () => {
 
         it('sends startReveal when the room is already revealed', () => {
             const first = createSocket('s1');
-            gateway.handleLoginEvent(first, { id: 'ana', room: 'A' });
-            gateway.handleRevealEvent(first, true);
+            legacy.send(first, 'login', { id: 'ana', room: 'A' });
+            legacy.send(first, 'reveal', true);
 
             const second = createSocket('s2');
-            gateway.handleLoginEvent(second, { id: 'bia', room: 'A' });
+            legacy.send(second, 'login', { id: 'bia', room: 'A' });
 
             expect(second.emit).toHaveBeenCalledWith('startReveal', true);
         });
@@ -61,8 +80,8 @@ describe('AppGateway', () => {
         it('ignores payloads without id or room', () => {
             const socket = createSocket('s1');
 
-            gateway.handleLoginEvent(socket, { id: 'ana' });
-            gateway.handleLoginEvent(socket, null);
+            legacy.send(socket, 'login', { id: 'ana' });
+            legacy.send(socket, 'login', null);
 
             expect(socket.join).not.toHaveBeenCalled();
             expect(emissions).toEqual([]);
@@ -70,10 +89,10 @@ describe('AppGateway', () => {
 
         it('leaves the previous room and notifies it when switching rooms', () => {
             const socket = createSocket('s1');
-            gateway.handleLoginEvent(socket, { id: 'ana', room: 'A' });
+            legacy.send(socket, 'login', { id: 'ana', room: 'A' });
             emissions.length = 0;
 
-            gateway.handleLoginEvent(socket, { id: 'ana', room: 'B' });
+            legacy.send(socket, 'login', { id: 'ana', room: 'B' });
 
             expect(socket.leave).toHaveBeenCalledWith('A');
             expect(emissions).toContainEqual({ room: 'A', event: 'logout', payload: { id: 'ana', room: 'A' } });
@@ -83,10 +102,10 @@ describe('AppGateway', () => {
     describe('update', () => {
         it('broadcasts the update to the room of the logged user', () => {
             const socket = createSocket('s1');
-            gateway.handleLoginEvent(socket, { id: 'ana', room: 'A' });
+            legacy.send(socket, 'login', { id: 'ana', room: 'A' });
             emissions.length = 0;
 
-            gateway.handleUpdateEvent(socket, { id: 'ana', room: 'other', vote: 8 });
+            legacy.send(socket, 'update', { id: 'ana', room: 'other', vote: 8 });
 
             expect(emissions).toEqual([{ room: 'A', event: 'update', payload: { id: 'ana', room: 'A', vote: 8 } }]);
         });
@@ -94,14 +113,14 @@ describe('AppGateway', () => {
         it('registers a socket that sends a full user before logging in', () => {
             const socket = createSocket('s1');
 
-            gateway.handleUpdateEvent(socket, { id: 'ana', room: 'A', vote: 2 });
+            legacy.send(socket, 'update', { id: 'ana', room: 'A', vote: 2 });
 
             expect(socket.join).toHaveBeenCalledWith('A');
             expect(emissions).toEqual([{ room: 'A', event: 'update', payload: { id: 'ana', room: 'A', vote: 2 } }]);
         });
 
         it('ignores partial updates from sockets without login', () => {
-            gateway.handleUpdateEvent(createSocket('s1'), { vote: 2 });
+            legacy.send(createSocket('s1'), 'update', { vote: 2 });
 
             expect(emissions).toEqual([]);
         });
@@ -111,9 +130,9 @@ describe('AppGateway', () => {
         it('hides the vote in login, start and update until the cards are revealed', () => {
             const ana = createSocket('s1');
             const bia = createSocket('s2');
-            gateway.handleLoginEvent(ana, { id: 'ana', room: 'A', votedValue: 'G' });
-            gateway.handleLoginEvent(bia, { id: 'bia', room: 'A', votedValue: '' });
-            gateway.handleUpdateEvent(bia, { id: 'bia', room: 'A', votedValue: 'P' });
+            legacy.send(ana, 'login', { id: 'ana', room: 'A', votedValue: 'G' });
+            legacy.send(bia, 'login', { id: 'bia', room: 'A', votedValue: '' });
+            legacy.send(bia, 'update', { id: 'bia', room: 'A', votedValue: 'P' });
 
             expect(bia.emit).toHaveBeenCalledWith('start', [
                 { id: 'ana', room: 'A', votedValue: HIDDEN_VOTE },
@@ -129,11 +148,11 @@ describe('AppGateway', () => {
         it('sends the real votes to the room before the reveal event', () => {
             const ana = createSocket('s1');
             const bia = createSocket('s2');
-            gateway.handleLoginEvent(ana, { id: 'ana', room: 'A', votedValue: 'G' });
-            gateway.handleLoginEvent(bia, { id: 'bia', room: 'A', votedValue: 'P' });
+            legacy.send(ana, 'login', { id: 'ana', room: 'A', votedValue: 'G' });
+            legacy.send(bia, 'login', { id: 'bia', room: 'A', votedValue: 'P' });
             emissions.length = 0;
 
-            gateway.handleRevealEvent(ana, true);
+            legacy.send(ana, 'reveal', true);
 
             expect(emissions).toEqual([
                 { room: 'A', event: 'update', payload: { id: 'ana', room: 'A', votedValue: 'G' } },
@@ -144,11 +163,11 @@ describe('AppGateway', () => {
 
         it('sends the real votes to whoever joins after the reveal', () => {
             const ana = createSocket('s1');
-            gateway.handleLoginEvent(ana, { id: 'ana', room: 'A', votedValue: 'G' });
-            gateway.handleRevealEvent(ana, true);
+            legacy.send(ana, 'login', { id: 'ana', room: 'A', votedValue: 'G' });
+            legacy.send(ana, 'reveal', true);
 
             const bia = createSocket('s2');
-            gateway.handleLoginEvent(bia, { id: 'bia', room: 'A', votedValue: '' });
+            legacy.send(bia, 'login', { id: 'bia', room: 'A', votedValue: '' });
 
             expect(bia.emit).toHaveBeenCalledWith('start', [
                 { id: 'ana', room: 'A', votedValue: 'G' },
@@ -158,10 +177,10 @@ describe('AppGateway', () => {
 
         it('hides the vote of a user that logs out', () => {
             const socket = createSocket('s1');
-            gateway.handleLoginEvent(socket, { id: 'ana', room: 'A', votedValue: 'M' });
+            legacy.send(socket, 'login', { id: 'ana', room: 'A', votedValue: 'M' });
             emissions.length = 0;
 
-            gateway.handleDisconnect(socket);
+            legacy.disconnect(socket);
 
             expect(emissions).toEqual([
                 { room: 'A', event: 'logout', payload: { id: 'ana', room: 'A', votedValue: HIDDEN_VOTE } },
@@ -173,12 +192,12 @@ describe('AppGateway', () => {
         it('clears every vote of the room and broadcasts it before hiding the cards', () => {
             const ana = createSocket('s1');
             const bia = createSocket('s2');
-            gateway.handleLoginEvent(ana, { id: 'ana', room: 'A', votedValue: 'G' });
-            gateway.handleLoginEvent(bia, { id: 'bia', room: 'A', votedValue: 'P' });
-            gateway.handleRevealEvent(ana, true);
+            legacy.send(ana, 'login', { id: 'ana', room: 'A', votedValue: 'G' });
+            legacy.send(bia, 'login', { id: 'bia', room: 'A', votedValue: 'P' });
+            legacy.send(ana, 'reveal', true);
             emissions.length = 0;
 
-            gateway.handleRevealEvent(bia, false);
+            legacy.send(bia, 'reveal', false);
 
             expect(emissions).toEqual([
                 { room: 'A', event: 'update', payload: { id: 'ana', room: 'A', votedValue: '' } },
@@ -189,12 +208,12 @@ describe('AppGateway', () => {
 
         it('hides the votes of the new round again', () => {
             const ana = createSocket('s1');
-            gateway.handleLoginEvent(ana, { id: 'ana', room: 'A', votedValue: 'G' });
-            gateway.handleRevealEvent(ana, true);
-            gateway.handleRevealEvent(ana, false);
+            legacy.send(ana, 'login', { id: 'ana', room: 'A', votedValue: 'G' });
+            legacy.send(ana, 'reveal', true);
+            legacy.send(ana, 'reveal', false);
             emissions.length = 0;
 
-            gateway.handleUpdateEvent(ana, { id: 'ana', room: 'A', votedValue: 'PP' });
+            legacy.send(ana, 'update', { id: 'ana', room: 'A', votedValue: 'PP' });
 
             expect(emissions).toEqual([
                 { room: 'A', event: 'update', payload: { id: 'ana', room: 'A', votedValue: HIDDEN_VOTE } },
@@ -206,10 +225,10 @@ describe('AppGateway', () => {
 
         it('ignores non boolean payloads', () => {
             const socket = createSocket('s1');
-            gateway.handleLoginEvent(socket, { id: 'ana', room: 'A' });
+            legacy.send(socket, 'login', { id: 'ana', room: 'A' });
             emissions.length = 0;
 
-            gateway.handleRevealEvent(socket, 'true');
+            legacy.send(socket, 'reveal', 'true');
 
             expect(emissions).toEqual([]);
         });
@@ -218,10 +237,10 @@ describe('AppGateway', () => {
     describe('disconnect', () => {
         it('broadcasts logout when the last socket of the user disconnects', () => {
             const socket = createSocket('s1');
-            gateway.handleLoginEvent(socket, { id: 'ana', room: 'A' });
+            legacy.send(socket, 'login', { id: 'ana', room: 'A' });
             emissions.length = 0;
 
-            gateway.handleDisconnect(socket);
+            legacy.disconnect(socket);
 
             expect(emissions).toEqual([{ room: 'A', event: 'logout', payload: { id: 'ana', room: 'A' } }]);
         });
@@ -229,11 +248,11 @@ describe('AppGateway', () => {
         it('keeps the user online while another socket of the same user is connected', () => {
             const oldSocket = createSocket('s1');
             const newSocket = createSocket('s2');
-            gateway.handleLoginEvent(oldSocket, { id: 'ana', room: 'A' });
-            gateway.handleLoginEvent(newSocket, { id: 'ana', room: 'A' });
+            legacy.send(oldSocket, 'login', { id: 'ana', room: 'A' });
+            legacy.send(newSocket, 'login', { id: 'ana', room: 'A' });
             emissions.length = 0;
 
-            gateway.handleDisconnect(oldSocket);
+            legacy.disconnect(oldSocket);
 
             expect(emissions).toEqual([]);
         });

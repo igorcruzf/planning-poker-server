@@ -149,13 +149,16 @@ export class Room {
         participant.presence = 'connected';
         participant.disconnectedAt = null;
         this.refreshOccupancy();
+        this.settleAutoReveal();
     }
 
     markDisconnected(participantId: string): void {
         const participant = this.requireParticipant(participantId);
+        if (participant.presence === 'disconnected') return;
         participant.presence = 'disconnected';
         participant.disconnectedAt = this.dependencies.clock.now();
         this.refreshOccupancy();
+        this.settleAutoReveal();
     }
 
     leave(participantId: string): void {
@@ -167,6 +170,7 @@ export class Room {
         }
         if (this._facilitatorId === leaving.id) this._facilitatorId = this.nextFacilitatorId();
         this.refreshOccupancy();
+        this.settleAutoReveal();
     }
 
     setRole(participantId: string, role: HumanRole): void {
@@ -175,6 +179,7 @@ export class Room {
         if (role === 'spectator' && !this._settings.allowSpectators) throw domainErrors.spectatorsDisabled();
         participant.role = role;
         if (role === 'spectator') participant.vote = null;
+        this.settleAutoReveal();
     }
 
     transferFacilitator(actorId: string, targetId: string): void {
@@ -192,6 +197,7 @@ export class Room {
         this.roster
             .filter((participant) => participant.vote !== null && !isVoteAllowed(this._settings, participant.vote))
             .forEach((participant) => this.clearVote(participant));
+        this.settleAutoReveal();
     }
 
     setCurrentIssue(actorId: string, issue: CurrentIssue | null): void {
@@ -211,15 +217,27 @@ export class Room {
             .map((player) => player.id);
     }
 
+    nextPresenceDeadline(): number | null {
+        const now = this.dependencies.clock.now();
+        const deadlines = this.roster
+            .filter((player) => isPlayer(player) && player.vote === null && player.disconnectedAt !== null)
+            .map((player) => player.disconnectedAt! + DISCONNECTED_PLAYER_GRACE_MS)
+            .filter((deadline) => deadline > now);
+        return deadlines.length > 0 ? Math.min(...deadlines) : null;
+    }
+
+    settle(): PhaseOutcome {
+        this.settleAutoReveal();
+        return { phase: this._phase };
+    }
+
     vote(actorId: string, request: VoteRequest): PhaseOutcome {
         const actor = this.requirePlayer(actorId);
         this.assertCurrentRound(request.roundId);
         this.assertPhase('voting');
         if (request.value !== null && !isVoteAllowed(this._settings, request.value)) throw domainErrors.invalidVote();
         actor.vote = request.value;
-        if (request.value !== null && this._settings.autoReveal && this.pendingVoterIds().length === 0) {
-            return this.beginReveal();
-        }
+        if (request.value !== null) this.settleAutoReveal();
         return { phase: this._phase };
     }
 
@@ -381,6 +399,12 @@ export class Room {
             participantId,
             name: this.requireParticipant(participantId).name,
         }));
+    }
+
+    private settleAutoReveal(): void {
+        if (this._phase !== 'voting' || !this._settings.autoReveal) return;
+        const someoneVoted = this.roster.some((participant) => isPlayer(participant) && participant.vote !== null);
+        if (someoneVoted && this.pendingVoterIds().length === 0) this.beginReveal();
     }
 
     private beginReveal(): PhaseOutcome {

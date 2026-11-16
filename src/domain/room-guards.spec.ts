@@ -128,6 +128,15 @@ describe('Role and deck changes after the reveal', () => {
         expect(room.settings).toMatchObject({ autoReveal: true, countdownSeconds: 5 });
     });
 
+    it('treats the same deck with the keys in another order as unchanged', () => {
+        const { room, owner } = revealedRoom();
+        const reordered = {
+            cards: room.settings.deck.cards.map(({ meaning, value }) => ({ meaning, value })),
+            presetId: room.settings.deck.presetId,
+        };
+        expect(() => room.updateSettings(owner.id, { deck: reordered, autoReveal: true })).not.toThrow();
+    });
+
     it('still clears the vote of a player who becomes a spectator during voting', () => {
         const { room, owner } = createRoomFixture();
         room.vote(owner.id, { roundId: 1, value: 'P' });

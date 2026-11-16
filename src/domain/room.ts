@@ -9,6 +9,7 @@ import {
     KIRO_MAX_PER_ROOM,
     KIRO_RATIONALE_MAX_LENGTH,
     KIRO_SEAT_NAME_PREFIX,
+    ParticipantRole,
     ROOM_IDLE_TTL_MS,
     RoomCreatePayload,
     RoomJoinPayload,
@@ -31,6 +32,7 @@ import {
     toParticipantView,
 } from './participant';
 import { generateSecret, hashSecret, secretMatchesHash } from './secrets';
+import { isStructurallyEqual } from './structural-equality';
 
 export interface RoomDependencies {
     readonly clock: Clock;
@@ -45,10 +47,23 @@ export type VoteRequest = RoundTarget & { value: string | null };
 export type FinalizeRequest = RoundTarget & { value: string };
 export type PhaseOutcome = { phase: RoundPhase };
 export type KiroVoteOutcome = PhaseOutcome & { roundId: number };
+export interface Ballot {
+    readonly participantId: string;
+    readonly name: string;
+    readonly role: ParticipantRole;
+    readonly value: string;
+    readonly rationale: string | null;
+}
 
 export const HISTORY_MAX_ENTRIES = 200;
 
-const sameContent = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
+const ballotOf = (participant: Participant): Ballot => ({
+    participantId: participant.id,
+    name: participant.name,
+    role: participant.role,
+    value: participant.vote!,
+    rationale: participant.rationale,
+});
 
 const PARTICIPANT_ID_BYTES = 9;
 const PARTICIPANT_ID_PREFIX = 'p-';
@@ -66,6 +81,7 @@ export class Room {
     private _revealedAt: number | null = null;
     private _finalEstimate: CardState | null = null;
     private _history: HistoryEntry[] = [];
+    private _departedBallots: Ballot[] = [];
     private _currentIssue: CurrentIssue | null = null;
     private _jira: JiraRoomState | null = null;
     private _emptiedAt: number | null = null;
@@ -116,8 +132,11 @@ export class Room {
         return this._finalEstimate;
     }
 
+    get ballots(): readonly Ballot[] {
+        return [...this.roster.filter((participant) => participant.vote !== null).map(ballotOf), ...this._departedBallots];
+    }
     get history(): readonly HistoryEntry[] {
-        return this._history;
+        return structuredClone(this._history);
     }
 
     get currentIssue(): CurrentIssue | null {
@@ -125,7 +144,7 @@ export class Room {
     }
 
     get jira(): JiraRoomState | null {
-        return this._jira;
+        return structuredClone(this._jira);
     }
 
     get emptiedAt(): number | null {
@@ -277,6 +296,7 @@ export class Room {
         this.requirePlayer(actorId);
         this.assertCurrentRound(request.roundId);
         this.roster.forEach((participant) => this.clearVote(participant));
+        this._departedBallots = [];
         this._roundId += 1;
         this._phase = 'voting';
         this._countdown = null;
@@ -369,6 +389,7 @@ export class Room {
     }
 
     private removeParticipant(participant: Participant): void {
+        if (this._phase !== 'voting' && participant.vote !== null) this._departedBallots.push(ballotOf(participant));
         this.roster.splice(this.roster.indexOf(participant), 1);
     }
 
@@ -429,8 +450,8 @@ export class Room {
     private changesCards(patch: RoomSettingsPatch): boolean {
         const { deck, specialCards } = this._settings;
         return (
-            (patch.deck !== undefined && !sameContent(patch.deck, deck)) ||
-            (patch.specialCards !== undefined && !sameContent(patch.specialCards, specialCards))
+            (patch.deck !== undefined && !isStructurallyEqual(patch.deck, deck)) ||
+            (patch.specialCards !== undefined && !isStructurallyEqual(patch.specialCards, specialCards))
         );
     }
 
@@ -457,15 +478,14 @@ export class Room {
     }
 
     private historyEntry(revealedAt: number): HistoryEntry {
-        const named = (participants: Participant[]) =>
-            participants.map((participant) => ({ name: participant.name, value: participant.vote! }));
-        const voted = this.roster.filter((participant) => participant.vote !== null);
+        const named = (ballots: Ballot[]) => ballots.map((ballot) => ({ name: ballot.name, value: ballot.value }));
+        const ballots = this.ballots;
         return {
             roundId: this._roundId,
             issue: this._currentIssue ? { ...this._currentIssue } : null,
             finalEstimate: null,
-            votes: named(voted.filter(isPlayer)),
-            kiroGuesses: named(voted.filter((participant) => participant.role === 'bot')),
+            votes: named(ballots.filter(isPlayer)),
+            kiroGuesses: named(ballots.filter((ballot) => ballot.role === 'bot')),
             kiroCountedAsPlayer: this._settings.kiroCountsAsPlayer,
             revealedAt,
         };

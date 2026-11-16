@@ -40,17 +40,22 @@ const roundState = (room: Room): RoundState => {
 };
 
 const revealedRoundState = (room: Room, base: { id: number; issueKey: string | null }): RoundState => {
-    const voted = room.participants.filter((participant) => participant.vote !== null);
+    const { ballots } = room;
     return {
         ...base,
         phase: 'revealed',
         revealedAt: room.revealedAt ?? room.createdAt,
-        votes: voted
+        votes: ballots
             .filter(isPlayer)
-            .map((player) => ({ participantId: player.id, name: player.name, value: player.vote! })),
-        kiroGuesses: voted
-            .filter((participant) => participant.role === 'bot')
-            .map((bot) => ({ participantId: bot.id, name: bot.name, value: bot.vote!, rationale: bot.rationale ?? '' })),
+            .map((ballot) => ({ participantId: ballot.participantId, name: ballot.name, value: ballot.value })),
+        kiroGuesses: ballots
+            .filter((ballot) => ballot.role === 'bot')
+            .map((ballot) => ({
+                participantId: ballot.participantId,
+                name: ballot.name,
+                value: ballot.value,
+                rationale: ballot.rationale ?? '',
+            })),
         finalEstimate: room.finalEstimate?.value ?? null,
     };
 };

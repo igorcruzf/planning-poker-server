@@ -15,7 +15,7 @@ export interface JiraEnabledConfig {
     encryptionKey: Buffer;
     redirectUri: string;
     frontUrl: string;
-    toJSON(): { enabled: true };
+    toJSON?(): { enabled: true };
 }
 
 export type JiraAuthConfig = JiraDisabledConfig | JiraEnabledConfig;

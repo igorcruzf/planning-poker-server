@@ -1,8 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AtlassianAuthClient, AtlassianAuthFailure, AtlassianTokens } from './atlassian-auth.client';
 import { JiraAppException, jiraError, rateLimitedError } from './jira-app.exception';
-import { JiraAuthConfig } from './jira-auth.config';
-import { Clock, JIRA_AUTH_CONFIG, JIRA_CLOCK, JIRA_SLEEP, Sleep } from './jira-auth.tokens';
+import type { JiraAuthConfig } from './jira-auth.config';
+import type { Clock, Sleep } from './jira-auth.tokens';
+import { JIRA_AUTH_CONFIG, JIRA_CLOCK, JIRA_SLEEP } from './jira-auth.tokens';
 import { SessionBlobCodec, SessionPayload } from './session-blob';
 
 export const TOKEN_EXPIRY_MARGIN_MS = 60_000;

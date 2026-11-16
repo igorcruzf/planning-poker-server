@@ -28,7 +28,10 @@ export class OneTimeStore<T> {
             return undefined;
         }
         const token = randomBytes(SECRET_TOKEN_BYTES).toString('base64url');
-        this.entries.set(OneTimeStore.lookupKey(token), { value, expiresAt: this.options.clock() + this.options.ttlMs });
+        this.entries.set(OneTimeStore.lookupKey(token), {
+            value,
+            expiresAt: this.options.clock() + this.options.ttlMs,
+        });
         return token;
     }
 

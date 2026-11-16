@@ -2,7 +2,8 @@ import { OneTimeStore } from './one-time-store';
 
 describe('OneTimeStore', () => {
     let now: number;
-    const createStore = (maxEntries = 3) => new OneTimeStore<{ label: string }>({ ttlMs: 1000, maxEntries, clock: () => now });
+    const createStore = (maxEntries = 3) =>
+        new OneTimeStore<{ label: string }>({ ttlMs: 1000, maxEntries, clock: () => now });
 
     beforeEach(() => {
         now = 10_000;

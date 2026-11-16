@@ -7,7 +7,13 @@ import { SessionBlobCodec, SessionPayload } from './session-blob';
 
 const key = randomBytes(32);
 const enabledConfig = { enabled: true, encryptionKey: key } as JiraEnabledConfig;
-const payload: SessionPayload = { v: 1, refreshToken: 'refresh-0', cloudId: 'cloud', accountId: 'account', issuedAt: 0 };
+const payload: SessionPayload = {
+    v: 1,
+    refreshToken: 'refresh-0',
+    cloudId: 'cloud',
+    accountId: 'account',
+    issuedAt: 0,
+};
 const HOUR = 3_600_000;
 
 const errorOf = async (promise: Promise<unknown>) => {

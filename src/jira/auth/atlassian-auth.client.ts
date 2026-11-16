@@ -2,7 +2,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { httpUrlSchema } from '../../contracts';
 import { jiraError } from './jira-app.exception';
-import { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
+import type { JiraAuthConfig } from './jira-auth.config';
+import { JiraEnabledConfig } from './jira-auth.config';
 import { JIRA_AUTH_CONFIG, JIRA_FETCH } from './jira-auth.tokens';
 
 export const ATLASSIAN_REQUEST_TIMEOUT_MS = 10_000;
@@ -66,7 +67,6 @@ export class AtlassianAuthClient {
         return this.authConfig;
     }
 
-
     async exchangeCode(code: string): Promise<AtlassianTokens> {
         return this.requestTokens({
             grant_type: 'authorization_code',
@@ -124,7 +124,10 @@ export class AtlassianAuthClient {
     private async send(url: string, init: RequestInit): Promise<unknown> {
         let response: Response;
         try {
-            response = await this.fetchFunction(url, { ...init, signal: AbortSignal.timeout(ATLASSIAN_REQUEST_TIMEOUT_MS) });
+            response = await this.fetchFunction(url, {
+                ...init,
+                signal: AbortSignal.timeout(ATLASSIAN_REQUEST_TIMEOUT_MS),
+            });
         } catch {
             throw new AtlassianAuthFailure('unavailable');
         }

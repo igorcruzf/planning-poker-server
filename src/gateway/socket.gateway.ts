@@ -11,6 +11,8 @@ import { HandshakeRejectedError } from './handshake-rejected.error';
 
 const GENERIC_HANDSHAKE_REJECTION = 'Connection rejected';
 
+const INTERNAL_ERROR_ACK = { ok: false, error: { code: 'internal_error' } } as const;
+
 type SocketIoMiddleware = (socket: Socket, next: (error?: Error) => void) => void;
 
 const runSafely = (action: () => unknown): Promise<unknown> => {
@@ -55,7 +57,7 @@ export class SocketGateway implements OnGatewayInit<Server>, OnGatewayConnection
     private bindEventHandlers(socket: Socket) {
         const handlers: WsMessageHandler[] = Array.from(this.registrations.eventHandlers(), ([event, handler]) => ({
             message: event,
-            callback: (payload: unknown) => this.handle(event, handler, payload, socket),
+            callback: (payload: unknown, ack?: unknown) => this.handle(event, handler, payload, socket, ack),
             isAckHandledManually: false,
         }));
         this.applicationConfig
@@ -63,12 +65,18 @@ export class SocketGateway implements OnGatewayInit<Server>, OnGatewayConnection
             .bindMessageHandlers(socket, handlers, (response: Promise<unknown>) => from(response));
     }
 
-    private async handle(event: string, handler: GatewayEventHandler, payload: unknown, socket: Socket) {
+    private async handle(
+        event: string,
+        handler: GatewayEventHandler,
+        payload: unknown,
+        socket: Socket,
+        ack: unknown,
+    ) {
         try {
             return await handler(payload, this.contextOf(socket));
         } catch (error) {
             this.logFailure(`Handler of event "${event}" failed for client ${socket.id}`, error);
-            return undefined;
+            return typeof ack === 'function' ? INTERNAL_ERROR_ACK : undefined;
         }
     }
 

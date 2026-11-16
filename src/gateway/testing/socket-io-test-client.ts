@@ -26,6 +26,11 @@ interface SocketIoPacket {
 
 type Waiter = (args: unknown[]) => void;
 
+interface PendingAck {
+    resolve: Waiter;
+    reject: (error: Error) => void;
+}
+
 export class SocketIoConnectError extends Error {
     constructor(
         message: string,
@@ -61,7 +66,8 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, description: str
 export class SocketIoTestClient {
     private readonly unconsumed = new Map<string, unknown[][]>();
     private readonly waiters = new Map<string, Waiter[]>();
-    private readonly pendingAcks = new Map<number, Waiter>();
+    private readonly pendingAcks = new Map<number, PendingAck>();
+    private readonly disconnections: (() => void)[] = [];
     private readonly closed: Promise<void>;
     private nextAckId = 0;
     private socketId: string | undefined;
@@ -71,7 +77,14 @@ export class SocketIoTestClient {
         private readonly webSocket: WebSocket,
         private readonly timeoutMs: number,
     ) {
-        this.closed = new Promise((resolve) => webSocket.addEventListener('close', () => resolve()));
+        this.closed = new Promise((resolve) =>
+            webSocket.addEventListener('close', () => {
+                this.connectedByServer = false;
+                this.rejectPendingAcks();
+                this.notifyDisconnection();
+                resolve();
+            }),
+        );
     }
 
     static connect(url: string, options: SocketIoTestClientOptions = {}): Promise<SocketIoTestClient> {
@@ -97,13 +110,30 @@ export class SocketIoTestClient {
         return this.connectedByServer && this.webSocket.readyState === WebSocket.OPEN;
     }
 
+    get pendingAckCount(): number {
+        return this.pendingAcks.size;
+    }
+
+    waitForDisconnect(): Promise<void> {
+        if (!this.connected) {
+            return Promise.resolve();
+        }
+        return withTimeout(
+            new Promise<void>((resolve) => this.disconnections.push(resolve)),
+            this.timeoutMs,
+            'waiting for the disconnection',
+        );
+    }
+
     emit(event: string, ...args: unknown[]): void {
         this.send(SOCKET_IO_EVENT, '', [event, ...args]);
     }
 
     emitWithAck(event: string, ...args: unknown[]): Promise<unknown> {
         const ackId = this.nextAckId++;
-        const acknowledged = new Promise<unknown[]>((resolve) => this.pendingAcks.set(ackId, resolve));
+        const acknowledged = new Promise<unknown[]>((resolve, reject) =>
+            this.pendingAcks.set(ackId, { resolve, reject }),
+        );
         this.send(SOCKET_IO_EVENT, String(ackId), [event, ...args]);
         return withTimeout(acknowledged, this.timeoutMs, `waiting for the ack of "${event}"`)
             .then(([response]) => response)
@@ -176,6 +206,7 @@ export class SocketIoTestClient {
             }
             case SOCKET_IO_DISCONNECT:
                 this.connectedByServer = false;
+                this.notifyDisconnection();
                 return;
             case SOCKET_IO_EVENT: {
                 const [event, ...args] = packet.data as [string, ...unknown[]];
@@ -183,9 +214,18 @@ export class SocketIoTestClient {
                 return;
             }
             case SOCKET_IO_ACK:
-                this.pendingAcks.get(packet.ackId ?? -1)?.(packet.data as unknown[]);
+                this.pendingAcks.get(packet.ackId ?? -1)?.resolve(packet.data as unknown[]);
                 return;
         }
+    }
+
+    private rejectPendingAcks() {
+        this.pendingAcks.forEach(({ reject }) => reject(new Error('Socket closed before the ack arrived')));
+        this.pendingAcks.clear();
+    }
+
+    private notifyDisconnection() {
+        this.disconnections.splice(0).forEach((resolve) => resolve());
     }
 
     private deliver(event: string, args: unknown[]) {

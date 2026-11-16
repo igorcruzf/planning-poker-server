@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { boundedTextSchema, hasUniqueItems } from './primitives';
+import { boundedTextSchema, deepFreeze, hasUniqueItems } from './primitives';
 
 export const CARD_VALUE_MAX_LENGTH = 4;
 export const CARD_MEANING_MAX_LENGTH = 40;
@@ -43,7 +43,7 @@ export type DeckPreset = {
 
 const cardsWithoutMeaning = (...values: string[]): Card[] => values.map((value) => ({ value }));
 
-export const DECK_PRESETS: readonly DeckPreset[] = [
+export const DECK_PRESETS: readonly DeckPreset[] = deepFreeze([
     {
         id: 'yakutsk',
         label: 'Yakutsk',
@@ -63,7 +63,7 @@ export const DECK_PRESETS: readonly DeckPreset[] = [
     },
     { id: 'powers_of_two', label: 'Potências de 2', cards: cardsWithoutMeaning('1', '2', '4', '8', '16', '32') },
     { id: 'custom', label: 'Personalizado', cards: [] },
-];
+]);
 
 export const DEFAULT_DECK_PRESET_ID: DeckPresetId = 'yakutsk';
 
@@ -90,10 +90,10 @@ export const deckSchema = z
     .refine(keepsPresetValues, { message: 'Card values must match the preset', path: ['cards'] });
 export type Deck = z.infer<typeof deckSchema>;
 
-export const DEFAULT_DECK: Deck = {
+export const DEFAULT_DECK: Deck = deepFreeze({
     presetId: DEFAULT_DECK_PRESET_ID,
     cards: presetCards(DEFAULT_DECK_PRESET_ID).map((card) => ({ ...card })),
-};
+});
 
 export const cardStateSchema = z.object({ value: z.string(), meaning: z.string().optional() });
 export type CardState = z.infer<typeof cardStateSchema>;

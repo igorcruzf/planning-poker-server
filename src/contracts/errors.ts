@@ -38,9 +38,14 @@ export const ERROR_CODES = errorCodeSchema.options;
 export const forbiddenReasonSchema = z.enum(['not_in_room', 'players_only', 'facilitator_only']);
 export type ForbiddenReason = z.infer<typeof forbiddenReasonSchema>;
 
+export const INVALID_PAYLOAD_MAX_ISSUES = 20;
+export const INVALID_PAYLOAD_TEXT_MAX_LENGTH = 200;
+const invalidPayloadTextSchema = z.string().max(INVALID_PAYLOAD_TEXT_MAX_LENGTH);
 export const invalidPayloadErrorSchema = z.object({
     code: z.literal('invalid_payload'),
-    issues: z.array(z.object({ path: z.string(), message: z.string() })),
+    issues: z
+        .array(z.object({ path: invalidPayloadTextSchema, message: invalidPayloadTextSchema }))
+        .max(INVALID_PAYLOAD_MAX_ISSUES),
 });
 
 export const protocolVersionErrorSchema = z.object({

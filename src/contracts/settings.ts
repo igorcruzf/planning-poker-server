@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DEFAULT_DECK, deckSchema, deckStateSchema, SPECIAL_CARDS, specialCardSchema } from './deck';
-import { hasUniqueItems } from './primitives';
+import { deepFreeze, hasUniqueItems } from './primitives';
 
 export const COUNTDOWN_SECONDS_OPTIONS = [0, 3, 5] as const;
 export const countdownSecondsSchema = z.literal(COUNTDOWN_SECONDS_OPTIONS);
@@ -26,7 +26,7 @@ const roomSettingsFields = {
 export const roomSettingsSchema = z.strictObject(roomSettingsFields);
 export type RoomSettings = z.infer<typeof roomSettingsSchema>;
 
-export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
+export const DEFAULT_ROOM_SETTINGS: RoomSettings = deepFreeze({
     deck: DEFAULT_DECK,
     specialCards: [...SPECIAL_CARDS],
     autoReveal: false,
@@ -36,11 +36,11 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
     kiroCountsAsPlayer: false,
     jiraLinked: false,
     jiraCommentOnSave: false,
-};
+});
 
 export const roomSettingsInputSchema = z.strictObject({
-    deck: roomSettingsFields.deck.default(DEFAULT_ROOM_SETTINGS.deck),
-    specialCards: roomSettingsFields.specialCards.default(DEFAULT_ROOM_SETTINGS.specialCards),
+    deck: roomSettingsFields.deck.default(() => structuredClone(DEFAULT_ROOM_SETTINGS.deck)),
+    specialCards: roomSettingsFields.specialCards.default(() => [...DEFAULT_ROOM_SETTINGS.specialCards]),
     autoReveal: roomSettingsFields.autoReveal.default(DEFAULT_ROOM_SETTINGS.autoReveal),
     countdownSeconds: roomSettingsFields.countdownSeconds.default(DEFAULT_ROOM_SETTINGS.countdownSeconds),
     allowSpectators: roomSettingsFields.allowSpectators.default(DEFAULT_ROOM_SETTINGS.allowSpectators),

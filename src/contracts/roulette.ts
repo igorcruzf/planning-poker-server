@@ -16,8 +16,8 @@ export const rouletteSpinPayloadSchema = z
     .strictObject({
         mode: rouletteModeSchema,
         names: rouletteNamesSchema.min(1),
-        absent: rouletteNamesSchema.default([]),
-        alreadyDrawn: rouletteNamesSchema.default([]),
+        absent: rouletteNamesSchema.default(() => []),
+        alreadyDrawn: rouletteNamesSchema.default(() => []),
     })
     .refine(({ names }) => hasUniqueItems(names), { message: 'Names must be unique', path: ['names'] })
     .refine(({ names, absent }) => isUniqueSubsetOf(absent, names), {

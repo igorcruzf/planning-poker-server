@@ -37,7 +37,7 @@ export const durationMsSchema = z.number().int().nonnegative();
 
 export const PERSON_NAME_MAX_LENGTH = 30;
 export const ROOM_NAME_MAX_LENGTH = 30;
-const CONTROL_CHARACTER = /\p{Cc}/u;
+const FORBIDDEN_CHARACTER = /[\p{Cc}\p{Cf}]/u;
 
 export const boundedTextSchema = (maxLength: number) =>
     z
@@ -45,7 +45,7 @@ export const boundedTextSchema = (maxLength: number) =>
         .trim()
         .min(1)
         .max(maxLength)
-        .refine((text) => !CONTROL_CHARACTER.test(text), { message: 'Control characters are not allowed' });
+        .refine((text) => !FORBIDDEN_CHARACTER.test(text), { message: 'Control and formatting characters are not allowed' });
 
 export const personNameSchema = boundedTextSchema(PERSON_NAME_MAX_LENGTH);
 export type PersonName = z.infer<typeof personNameSchema>;
@@ -53,6 +53,19 @@ export type PersonName = z.infer<typeof personNameSchema>;
 export const roomNameSchema = boundedTextSchema(ROOM_NAME_MAX_LENGTH);
 export type RoomName = z.infer<typeof roomNameSchema>;
 
-export const httpUrlSchema = z.url({ protocol: /^https?$/ });
+const hasNoCredentials = (url: string) => {
+    const { username, password } = new URL(url);
+    return !username && !password;
+};
+export const httpUrlSchema = z
+    .url({ protocol: /^https?$/ })
+    .refine(hasNoCredentials, { message: 'URL must not contain credentials' });
 
+export const deepFreeze = <T>(value: T): T => {
+    if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+        Object.values(value).forEach(deepFreeze);
+        Object.freeze(value);
+    }
+    return value;
+};
 export const hasUniqueItems = (items: readonly unknown[]) => new Set(items).size === items.length;

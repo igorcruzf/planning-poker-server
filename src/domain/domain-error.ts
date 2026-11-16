@@ -24,5 +24,6 @@ export const domainErrors = {
     spectatorsDisabled: () => new DomainError({ code: 'spectators_disabled' }),
     kiroDisabled: () => new DomainError({ code: 'kiro_disabled' }),
     inviteInvalid: () => new DomainError({ code: 'invite_invalid' }),
+    internal: () => new DomainError({ code: 'internal_error' }),
     nameTaken: () => new DomainError({ code: 'invalid_payload', issues: [NAME_TAKEN_ISSUE] }),
 };

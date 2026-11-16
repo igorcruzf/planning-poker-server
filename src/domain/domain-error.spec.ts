@@ -23,6 +23,7 @@ describe('DomainError', () => {
         [domainErrors.spectatorsDisabled(), 'spectators_disabled'],
         [domainErrors.kiroDisabled(), 'kiro_disabled'],
         [domainErrors.inviteInvalid(), 'invite_invalid'],
+        [domainErrors.internal(), 'internal_error'],
         [domainErrors.nameTaken(), 'invalid_payload'],
     ])('builds a schema-valid error for %#', (error, code) => {
         expect(error.error.code).toBe(code);

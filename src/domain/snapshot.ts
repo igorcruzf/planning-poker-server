@@ -12,7 +12,7 @@ export const snapshotFor = (room: Room, viewerId: string | null): RoomState => {
         settings: room.settings,
         participants: room.participants.map((participant) => participantState(room, participant)),
         round: roundState(room),
-        history: room.history,
+        history: [...room.history],
         jira: room.jira,
         self: { participantId: viewer?.id ?? ANONYMOUS_VIEWER_ID, vote: viewer?.vote ?? null },
     });

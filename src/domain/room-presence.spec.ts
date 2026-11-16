@@ -34,6 +34,33 @@ describe('Next presence deadline', () => {
         expect(room.nextPresenceDeadline()).toBe(first + DISCONNECTED_PLAYER_GRACE_MS);
     });
 
+    it('is null outside the voting phase', () => {
+        const { room, owner, bia } = autoRevealFixture();
+        room.markDisconnected(bia.id);
+        expect(room.nextPresenceDeadline()).not.toBeNull();
+        room.vote(owner.id, { roundId: 1, value: 'P' });
+        room.reveal(owner.id, { roundId: 1, confirmMissingVotes: true });
+        expect(room.phase).toBe('revealed');
+        expect(room.nextPresenceDeadline()).toBeNull();
+    });
+
+    it('is null during the countdown', () => {
+        const { room, clock, owner, join } = createRoomFixture({ settings: { autoReveal: true, countdownSeconds: 3 } });
+        const bia = join('Bia');
+        room.markDisconnected(bia.id);
+        clock.advance(DISCONNECTED_PLAYER_GRACE_MS);
+        room.vote(owner.id, { roundId: 1, value: 'P' });
+        expect(room.phase).toBe('countdown');
+        expect(room.nextPresenceDeadline()).toBeNull();
+    });
+
+    it('is null when the auto reveal is off', () => {
+        const { room, bia } = autoRevealFixture();
+        room.markDisconnected(bia.id);
+        room.updateSettings(room.facilitatorId!, { autoReveal: false });
+        expect(room.nextPresenceDeadline()).toBeNull();
+    });
+
     it('ignores players that already voted, spectators, and deadlines already past', () => {
         const { room, clock, owner, bia, join } = autoRevealFixture();
         const leo = join('Leo', 'spectator');
@@ -44,6 +71,19 @@ describe('Next presence deadline', () => {
         room.markDisconnected(owner.id);
         clock.advance(DISCONNECTED_PLAYER_GRACE_MS);
         expect(room.nextPresenceDeadline()).toBeNull();
+    });
+});
+
+describe('Read-only copies', () => {
+    it('does not let the caller change the history or the Jira state of the room', () => {
+        const { room, owner } = createRoomFixture({ settings: { countdownSeconds: 0 } });
+        room.vote(owner.id, { roundId: 1, value: 'P' });
+        room.reveal(owner.id, { roundId: 1, confirmMissingVotes: false });
+        room.setJiraState({ connected: true, agenda: [], currentIssue: null });
+        room.history[0].votes[0].value = 'XX';
+        room.jira!.agenda.push({ key: 'YAK-1', summary: 'Card' } as never);
+        expect(room.history[0].votes).toEqual([{ name: 'Ana', value: 'P' }]);
+        expect(room.jira!.agenda).toEqual([]);
     });
 });
 

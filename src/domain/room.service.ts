@@ -75,7 +75,7 @@ export class RoomService {
     }
 
     settle(roomCode: string): PhaseOutcome {
-        return this.mutate(roomCode, 'settled', (room) => room.settle());
+        return this.mutateOnPhaseChange(roomCode, 'settled', (room) => room.settle());
     }
 
     createRoom(payload: RoomCreatePayload): RoomSession {
@@ -106,15 +106,15 @@ export class RoomService {
     }
 
     disconnect(roomCode: string, participantId: string): void {
-        this.mutate(roomCode, 'disconnected', (room) => room.markDisconnected(participantId));
+        this.mutateIfChanged(roomCode, 'disconnected', (room) => room.markDisconnected(participantId));
     }
 
     setRole(roomCode: string, participantId: string, role: HumanRole): void {
-        this.mutate(roomCode, 'role_changed', (room) => room.setRole(participantId, role));
+        this.mutateIfChanged(roomCode, 'role_changed', (room) => room.setRole(participantId, role));
     }
 
     updateSettings(roomCode: string, actorId: string, patch: RoomSettingsPatch): void {
-        this.mutate(roomCode, 'settings_updated', (room) => room.updateSettings(actorId, patch));
+        this.mutateIfChanged(roomCode, 'settings_updated', (room) => room.updateSettings(actorId, patch));
     }
 
     transferFacilitator(roomCode: string, actorId: string, targetId: string): void {
@@ -174,6 +174,11 @@ export class RoomService {
         const result = action(room);
         this.changes.notify({ roomCode: room.code, reason });
         return result;
+    }
+
+    private mutateIfChanged(roomCode: string, reason: RoomChangeReason, action: (room: Room) => boolean): void {
+        const room = this.rooms.require(roomCode);
+        if (action(room)) this.changes.notify({ roomCode: room.code, reason });
     }
 
     private mutateOnPhaseChange(

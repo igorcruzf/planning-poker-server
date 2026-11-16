@@ -111,6 +111,35 @@ describe('RoomService change notification', () => {
         expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'countdown_finished' }]);
     });
 
+    it('does not notify mutations that changed nothing', () => {
+        const owner = kiroRoom();
+        const bia = service.join({ roomCode: owner.roomCode, name: 'Bia', role: 'player' });
+        service.disconnect(owner.roomCode, bia.participantId);
+        service.onChange((change) => changes.push(change));
+        service.disconnect(owner.roomCode, bia.participantId);
+        service.setRole(owner.roomCode, owner.participantId, 'player');
+        service.updateSettings(owner.roomCode, owner.participantId, { autoReveal: false });
+        service.settle(owner.roomCode);
+        expect(changes).toEqual([]);
+    });
+
+    it('notifies the mutations that did change something', () => {
+        const owner = kiroRoom();
+        service.onChange((change) => changes.push(change));
+        service.setRole(owner.roomCode, owner.participantId, 'spectator');
+        service.updateSettings(owner.roomCode, owner.participantId, { autoReveal: true });
+        expect(changes.map((change) => change.reason)).toEqual(['role_changed', 'settings_updated']);
+    });
+
+    it('notifies a repeated disconnect only once', () => {
+        const owner = kiroRoom();
+        service.onChange((change) => changes.push(change));
+        service.disconnect(owner.roomCode, owner.participantId);
+        service.disconnect(owner.roomCode, owner.participantId);
+        service.connect(owner.roomCode, owner.participantId);
+        expect(changes.map((change) => change.reason)).toEqual(['disconnected', 'connected']);
+    });
+
     it('settles the auto reveal when the presence deadline passes and reports the next deadline', () => {
         const owner = service.createRoom(
             createPayload({ settings: { ...createPayload().settings, autoReveal: true, countdownSeconds: 0 } }),

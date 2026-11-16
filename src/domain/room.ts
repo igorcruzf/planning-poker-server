@@ -184,13 +184,14 @@ export class Room {
         this.settleAutoReveal();
     }
 
-    markDisconnected(participantId: string): void {
+    markDisconnected(participantId: string): boolean {
         const participant = this.requireSeat(participantId);
-        if (participant.presence === 'disconnected') return;
+        if (participant.presence === 'disconnected') return false;
         participant.presence = 'disconnected';
         participant.disconnectedAt = this.dependencies.clock.now();
         this.refreshOccupancy();
         this.settleAutoReveal();
+        return true;
     }
 
     leave(participantId: string): void {
@@ -205,14 +206,15 @@ export class Room {
         this.settleAutoReveal();
     }
 
-    setRole(participantId: string, role: HumanRole): void {
+    setRole(participantId: string, role: HumanRole): boolean {
         const participant = this.requireHuman(participantId);
-        if (participant.role === role) return;
+        if (participant.role === role) return false;
         this.assertPhase('voting');
         if (role === 'spectator' && !this._settings.allowSpectators) throw domainErrors.spectatorsDisabled();
         participant.role = role;
         if (role === 'spectator') participant.vote = null;
         this.settleAutoReveal();
+        return true;
     }
 
     transferFacilitator(actorId: string, targetId: string): void {
@@ -222,16 +224,19 @@ export class Room {
         this._facilitatorId = target.id;
     }
 
-    updateSettings(actorId: string, patch: RoomSettingsPatch): void {
+    updateSettings(actorId: string, patch: RoomSettingsPatch): boolean {
         this.requireFacilitator(actorId);
         const parsed = roomSettingsPatchSchema.safeParse(patch);
         if (!parsed.success) throw this.invalidSettings();
         if (this.changesCards(parsed.data)) this.assertPhase('voting');
-        this._settings = { ...this._settings, ...structuredClone(parsed.data) };
+        const updated = { ...this._settings, ...structuredClone(parsed.data) };
+        if (isStructurallyEqual(updated, this._settings)) return false;
+        this._settings = updated;
         this.roster
             .filter((participant) => participant.vote !== null && !isVoteAllowed(this._settings, participant.vote))
             .forEach((participant) => this.clearVote(participant));
         this.settleAutoReveal();
+        return true;
     }
 
     setCurrentIssue(actorId: string, issue: CurrentIssue | null): void {
@@ -252,6 +257,7 @@ export class Room {
     }
 
     nextPresenceDeadline(): number | null {
+        if (this._phase !== 'voting' || !this._settings.autoReveal) return null;
         const now = this.dependencies.clock.now();
         const deadlines = this.roster
             .filter((player) => isPlayer(player) && player.vote === null && player.disconnectedAt !== null)

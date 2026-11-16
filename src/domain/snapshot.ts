@@ -1,5 +1,5 @@
 import { ParticipantState, RoomState, RoundState } from '../contracts';
-import { isHuman, isPlayer, Participant } from './participant';
+import { isHuman, isPlayer, ParticipantView } from './participant';
 import { Room } from './room';
 
 export const ANONYMOUS_VIEWER_ID = 'anonymous';
@@ -18,7 +18,7 @@ export const snapshotFor = (room: Room, viewerId: string | null): RoomState => {
     });
 };
 
-const participantState = (room: Room, participant: Participant): ParticipantState => {
+const participantState = (room: Room, participant: ParticipantView): ParticipantState => {
     const common = {
         id: participant.id,
         name: participant.name,

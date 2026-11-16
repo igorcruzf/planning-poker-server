@@ -15,11 +15,21 @@ export interface Participant {
 
 export type ParticipantView = Readonly<Omit<Participant, 'tokenHash'>>;
 
-export const isHuman = (participant: Participant): boolean => participant.role !== 'bot';
+export const isHuman = (participant: Pick<Participant, 'role'>): boolean => participant.role !== 'bot';
 
-export const isPlayer = (participant: Participant): boolean => participant.role === 'player';
+export const isPlayer = (participant: Pick<Participant, 'role'>): boolean => participant.role === 'player';
 
-export const toParticipantView = ({ tokenHash: _tokenHash, ...view }: Participant): ParticipantView => view;
+export const toParticipantView = (participant: Participant): ParticipantView => ({
+    id: participant.id,
+    ownerId: participant.ownerId,
+    name: participant.name,
+    role: participant.role,
+    presence: participant.presence,
+    disconnectedAt: participant.disconnectedAt,
+    vote: participant.vote,
+    rationale: participant.rationale,
+    umbrella: participant.umbrella,
+});
 
 export const normalizeName = (name: string): string => name.normalize('NFC').trim().toLowerCase();
 

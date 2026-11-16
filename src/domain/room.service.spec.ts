@@ -3,7 +3,7 @@ import { RoomCreatePayload, roomCreatePayloadSchema, roomSessionSchema, roomStat
 import { DomainError } from './domain-error';
 import { DomainModule } from './domain.module';
 import { RoomRepository } from './room.repository';
-import { RoomService } from './room.service';
+import { RoomChange, RoomService } from './room.service';
 
 const createPayload = (overrides: Partial<RoomCreatePayload> = {}): RoomCreatePayload =>
     roomCreatePayloadSchema.parse({ roomName: 'Sprint', participantName: 'Ana', ...overrides });
@@ -32,6 +32,106 @@ describe('DomainModule', () => {
         } finally {
             await context.close();
         }
+    });
+});
+
+describe('RoomService change notification', () => {
+    let context: Awaited<ReturnType<typeof NestFactory.createApplicationContext>>;
+    let service: RoomService;
+    let changes: RoomChange[];
+
+    beforeEach(async () => {
+        context = await NestFactory.createApplicationContext(DomainModule, { logger: false });
+        service = context.get(RoomService);
+        changes = [];
+    });
+
+    afterEach(() => context.close());
+
+    const kiroRoom = () =>
+        service.createRoom(createPayload({ settings: { ...createPayload().settings, allowKiro: true, countdownSeconds: 0 } }));
+
+    it('notifies the room code and the reason after each successful mutation', () => {
+        const owner = kiroRoom();
+        service.onChange((change) => changes.push(change));
+        const bia = service.join({ roomCode: owner.roomCode, name: 'Bia', role: 'player' });
+        service.vote(owner.roomCode, owner.participantId, { roundId: 1, value: 'P' });
+        service.disconnect(owner.roomCode, bia.participantId);
+        expect(changes).toEqual([
+            { roomCode: owner.roomCode, reason: 'joined' },
+            { roomCode: owner.roomCode, reason: 'voted' },
+            { roomCode: owner.roomCode, reason: 'disconnected' },
+        ]);
+    });
+
+    it('notifies the Kiro mutations: invite, seat, vote and leave', () => {
+        const owner = kiroRoom();
+        service.onChange((change) => changes.push(change));
+        const seat = service.redeemKiroInvite(service.createKiroInvite(owner.roomCode, owner.participantId).inviteCode);
+        service.castKiroVote(seat.roomCode, seat.participantId, { value: 'M', rationale: 'Parece médio' });
+        service.leave(seat.roomCode, seat.participantId);
+        expect(changes.map((change) => change.reason)).toEqual([
+            'kiro_invite_created',
+            'kiro_seated',
+            'kiro_voted',
+            'left',
+        ]);
+    });
+
+    it('does not notify when the mutation fails', () => {
+        const owner = kiroRoom();
+        service.onChange((change) => changes.push(change));
+        expect(() => service.vote(owner.roomCode, owner.participantId, { roundId: 1, value: 'XL' })).toThrow(DomainError);
+        expect(() => service.join({ roomCode: owner.roomCode, name: 'Kiro do Ana', role: 'player' })).toThrow(DomainError);
+        expect(changes).toEqual([]);
+    });
+
+    it('stops notifying after the returned cancel function runs and isolates a failing listener', () => {
+        const owner = kiroRoom();
+        const failing = jest.fn(() => {
+            throw new Error('listener failure');
+        });
+        service.onChange(failing);
+        const cancel = service.onChange((change) => changes.push(change));
+        service.setCurrentIssue(owner.roomCode, owner.participantId, { key: 'YAK-1', summary: 'Card' });
+        cancel();
+        service.setCurrentIssue(owner.roomCode, owner.participantId, null);
+        expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'issue_changed' }]);
+        expect(failing).toHaveBeenCalledTimes(2);
+    });
+
+    it('notifies the countdown end only when the phase really changes', () => {
+        const owner = service.createRoom(createPayload({ settings: { ...createPayload().settings, countdownSeconds: 3 } }));
+        service.vote(owner.roomCode, owner.participantId, { roundId: 1, value: 'P' });
+        service.reveal(owner.roomCode, owner.participantId, { roundId: 1, confirmMissingVotes: false });
+        service.onChange((change) => changes.push(change));
+        service.finishCountdown(owner.roomCode, 99);
+        service.finishCountdown(owner.roomCode, 1);
+        service.finishCountdown(owner.roomCode, 1);
+        expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'countdown_finished' }]);
+    });
+
+    it('settles the auto reveal when the presence deadline passes and reports the next deadline', () => {
+        const owner = service.createRoom(
+            createPayload({ settings: { ...createPayload().settings, autoReveal: true, countdownSeconds: 0 } }),
+        );
+        const bia = service.join({ roomCode: owner.roomCode, name: 'Bia', role: 'player' });
+        service.vote(owner.roomCode, owner.participantId, { roundId: 1, value: 'P' });
+        service.disconnect(owner.roomCode, bia.participantId);
+        const deadline = service.nextPresenceDeadline(owner.roomCode)!;
+        expect(deadline).toBeGreaterThan(Date.now());
+        service.onChange((change) => changes.push(change));
+        jest.spyOn(Date, 'now').mockReturnValue(deadline);
+        expect(service.settle(owner.roomCode)).toEqual({ phase: 'revealed' });
+        expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'settled' }]);
+        expect(service.nextPresenceDeadline(owner.roomCode)).toBeNull();
+        jest.restoreAllMocks();
+    });
+
+    it('does not leave an orphan room behind when the creator name is refused', () => {
+        const repository = context.get(RoomRepository);
+        expect(() => service.createRoom(createPayload({ participantName: 'Kiro do Ana' }))).toThrow(DomainError);
+        expect(repository.size).toBe(0);
     });
 });
 

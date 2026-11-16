@@ -36,7 +36,16 @@ export class RoomRepository implements OnModuleInit, OnModuleDestroy {
 
     find(code: string): Room | undefined {
         const normalized = roomCodeSchema.safeParse(code);
-        return normalized.success ? this.rooms.get(normalized.data) : undefined;
+        const room = normalized.success ? this.rooms.get(normalized.data) : undefined;
+        if (room?.isExpired(this.clock.now())) {
+            this.rooms.delete(room.code);
+            return undefined;
+        }
+        return room;
+    }
+
+    discard(code: string): void {
+        this.rooms.delete(code);
     }
 
     require(code: string): Room {
@@ -46,7 +55,8 @@ export class RoomRepository implements OnModuleInit, OnModuleDestroy {
     }
 
     findByKiroInvite(inviteCode: string): Room | undefined {
-        return [...this.rooms.values()].find((room) => room.hasKiroInvite(inviteCode));
+        const now = this.clock.now();
+        return [...this.rooms.values()].find((room) => !room.isExpired(now) && room.hasKiroInvite(inviteCode));
     }
 
     sweep(now: number): void {

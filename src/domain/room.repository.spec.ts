@@ -85,6 +85,34 @@ describe('RoomRepository', () => {
         expect(repository.find(room.code)).toBe(room);
     });
 
+    it('treats a room past its TTL as missing before the next sweep, even for a valid token', () => {
+        const { clock, repository } = createRepository(['yak-aaaaaaaa']);
+        const room = repository.create(roomPayload());
+        const owner = room.join({ name: 'Ana', role: 'player' });
+        room.markDisconnected(owner.participantId);
+        clock.advance(ROOM_IDLE_TTL_MS);
+        expect(repository.find(room.code)).toBeUndefined();
+        expect(repository.size).toBe(0);
+        expect(() => repository.require(room.code)).toThrow(DomainError);
+    });
+
+    it('does not find a Kiro invite in a room past its TTL', () => {
+        const { clock, repository } = createRepository(['yak-aaaaaaaa']);
+        const room = repository.create(roomPayload({ settings: { allowKiro: true } }));
+        const owner = room.join({ name: 'Ana', role: 'player' });
+        const invite = room.createKiroInvite(owner.participantId);
+        room.markDisconnected(owner.participantId);
+        clock.advance(ROOM_IDLE_TTL_MS);
+        expect(repository.findByKiroInvite(invite.inviteCode)).toBeUndefined();
+    });
+
+    it('discards a room by code', () => {
+        const { repository } = createRepository(['yak-aaaaaaaa']);
+        const room = repository.create(roomPayload());
+        repository.discard(room.code);
+        expect(repository.size).toBe(0);
+    });
+
     it('finds the room that holds a Kiro invite', () => {
         const { repository } = createRepository(['yak-aaaaaaaa', 'yak-bbbbbbbb']);
         const plain = repository.create(roomPayload());

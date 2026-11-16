@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { httpUrlSchema } from '../../contracts';
-import { JiraEnabledConfig } from './jira-auth.config';
+import { jiraError } from './jira-app.exception';
+import { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
 import { JIRA_AUTH_CONFIG, JIRA_FETCH } from './jira-auth.tokens';
 
 export const ATLASSIAN_REQUEST_TIMEOUT_MS = 10_000;
@@ -54,9 +55,17 @@ const parseRetryAfterMs = (header: string | null): number | undefined => {
 @Injectable()
 export class AtlassianAuthClient {
     constructor(
-        @Inject(JIRA_AUTH_CONFIG) private readonly config: JiraEnabledConfig,
+        @Inject(JIRA_AUTH_CONFIG) private readonly authConfig: JiraAuthConfig,
         @Inject(JIRA_FETCH) private readonly fetchFunction: FetchFunction,
     ) {}
+
+    private get config(): JiraEnabledConfig {
+        if (!this.authConfig.enabled) {
+            throw jiraError('jira_disabled');
+        }
+        return this.authConfig;
+    }
+
 
     async exchangeCode(code: string): Promise<AtlassianTokens> {
         return this.requestTokens({

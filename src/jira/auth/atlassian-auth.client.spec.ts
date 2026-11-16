@@ -112,6 +112,12 @@ describe('AtlassianAuthClient', () => {
         expect(failure.message).not.toContain('leaked-access-token');
     });
 
+    it('refuses to call Atlassian when Jira is disabled', async () => {
+        const disabled = new AtlassianAuthClient({ enabled: false, frontUrl: 'https://front.test' }, fetchMock);
+        await expect(disabled.refresh('r')).rejects.toMatchObject({ code: 'jira_disabled' });
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('never puts secrets in the failure message', async () => {
         fetchMock.mockResolvedValue(jsonResponse({ error: 'bad', refresh_token: 'refresh-leak' }, { status: 400 }));
         const failure = await failureOf(client.exchangeCode('code-leak'));

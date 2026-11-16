@@ -16,7 +16,23 @@ const errorOf = (action: () => unknown) => {
 const nameTaken = { code: 'invalid_payload', issues: [{ path: 'name', message: 'name_taken' }] };
 
 describe('Reserved Kiro seat names', () => {
-    it.each(['Kiro do Ana', 'kiro do ana', '  KIRO DO Bia', 'Kiro do '])('refuses the human name %p', (name) => {
+    it.each([
+        'Kiro do Ana',
+        'kiro do ana',
+        '  KIRO DO Bia',
+        'Kiro do ',
+        'Ki\u200dro do Ana',
+        'Ki\u200cro do Ana',
+        'Kiro  do Ana',
+        'Kiro\u00a0do Ana',
+        '\uff2biro do Ana',
+        '\u041airo do Ana',
+        'K\u0456r\u043e do Ana',
+        '\u039airo do Ana',
+        'Kir\u03bf do Ana',
+        'Kiro Domingos',
+        'Kirodo Leo',
+    ])('refuses the human name %p', (name) => {
         const { room } = createRoomFixture({ settings: { allowKiro: true } });
         expect(errorOf(() => room.join({ name, role: 'player' }))).toEqual(nameTaken);
     });
@@ -31,8 +47,8 @@ describe('Reserved Kiro seat names', () => {
     it('still accepts names that only look similar', () => {
         const { room } = createRoomFixture();
         expect(() => room.join({ name: 'Kiro', role: 'player' })).not.toThrow();
-        expect(() => room.join({ name: 'Kirodo Leo', role: 'player' })).not.toThrow();
-        expect(() => room.join({ name: 'Kiro Domingos', role: 'player' })).not.toThrow();
+        expect(() => room.join({ name: 'Kira', role: 'player' })).not.toThrow();
+        expect(() => room.join({ name: 'Kirk', role: 'player' })).not.toThrow();
     });
 
     it('refuses a creator name with the reserved prefix', () => {
@@ -53,6 +69,15 @@ describe('Name comparison', () => {
     });
 });
 
+describe('Name uniqueness by skeleton', () => {
+    it.each(['Jo\u200d\u00e3o', 'J o \u00e3o', '\uff2ao\u00e3o'])(
+        'treats %p as the same name as João',
+        (name) => {
+            const { room } = createRoomFixture({ participantName: 'Jo\u00e3o' });
+            expect(errorOf(() => room.join({ name, role: 'player' }))).toEqual(nameTaken);
+        },
+    );
+});
 describe('Role and deck changes after the reveal', () => {
     const revealedRoom = () => {
         const fixture = createRoomFixture({ settings: { countdownSeconds: 0 } });

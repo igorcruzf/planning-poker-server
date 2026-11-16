@@ -25,7 +25,7 @@ import {
     isHuman,
     isPlayer,
     isReservedForKiro,
-    normalizeName,
+    nameSkeleton,
     Participant,
     ParticipantView,
     toParticipantView,
@@ -373,8 +373,8 @@ export class Room {
     }
 
     private assertNameAvailable(name: string): void {
-        const wanted = normalizeName(name);
-        if (this.roster.some((participant) => normalizeName(participant.name) === wanted)) {
+        const wanted = nameSkeleton(name);
+        if (this.roster.some((participant) => nameSkeleton(participant.name) === wanted)) {
             throw domainErrors.nameTaken();
         }
     }

@@ -31,10 +31,25 @@ export const toParticipantView = (participant: Participant): ParticipantView => 
     umbrella: participant.umbrella,
 });
 
-export const normalizeName = (name: string): string => name.normalize('NFC').trim().toLowerCase();
-
-export const isReservedForKiro = (name: string): boolean => {
-    const reserved = normalizeName(KIRO_SEAT_NAME_PREFIX);
-    const wanted = normalizeName(name);
-    return wanted === reserved || wanted.startsWith(`${reserved} `);
+const CONFUSABLE_LETTERS: Readonly<Record<string, string>> = {
+    '\u043a': 'k',
+    '\u0456': 'i',
+    '\u043e': 'o',
+    '\u0440': 'p',
+    '\u0441': 'c',
+    '\u0435': 'e',
+    '\u0430': 'a',
+    '\u0445': 'x',
+    '\u03ba': 'k',
+    '\u03bf': 'o',
 };
+const INVISIBLE_OR_SPACE = /[\p{Cf}\p{Z}\s]/gu;
+const CONFUSABLE_PATTERN = new RegExp(`[${Object.keys(CONFUSABLE_LETTERS).join('')}]`, 'gu');
+export const nameSkeleton = (name: string): string =>
+    name
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(INVISIBLE_OR_SPACE, '')
+        .replace(CONFUSABLE_PATTERN, (letter) => CONFUSABLE_LETTERS[letter]);
+export const isReservedForKiro = (name: string): boolean =>
+    nameSkeleton(name).startsWith(nameSkeleton(KIRO_SEAT_NAME_PREFIX));

@@ -32,6 +32,7 @@ const CLIENT_EVENT_SAMPLES: { [E in ClientEventName]: ClientEventPayload<E> } = 
     'round:finalize': { roundId: 1, value: 'M' },
     'fun:throw': { targetId: 'p-bruno' },
     'fun:umbrella': { enabled: true },
+    'fun:react': { reaction: '👍' },
     'roulette:spin': { mode: 'leader', names: ['Ana', 'Bruno'], absent: ['Bruno'], alreadyDrawn: [] },
     'kiro:invite': {},
 };

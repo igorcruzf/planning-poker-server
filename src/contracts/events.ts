@@ -1,6 +1,12 @@
 import type { z } from 'zod';
 import { type AckCallback, noResultSchema } from './ack';
-import { funThrownSchema, funThrowPayloadSchema, funUmbrellaPayloadSchema } from './fun';
+import {
+    funReactedSchema,
+    funReactPayloadSchema,
+    funThrownSchema,
+    funThrowPayloadSchema,
+    funUmbrellaPayloadSchema,
+} from './fun';
 import { kiroInviteSchema } from './kiro';
 import { emptyPayloadSchema } from './primitives';
 import {
@@ -39,6 +45,7 @@ export const CLIENT_EVENTS = {
     'round:finalize': { payload: roundFinalizePayloadSchema, result: noResultSchema },
     'fun:throw': { payload: funThrowPayloadSchema, result: noResultSchema },
     'fun:umbrella': { payload: funUmbrellaPayloadSchema, result: noResultSchema },
+    'fun:react': { payload: funReactPayloadSchema, result: noResultSchema },
     'roulette:spin': { payload: rouletteSpinPayloadSchema, result: noResultSchema },
     'kiro:invite': { payload: emptyPayloadSchema, result: kiroInviteSchema },
 } as const satisfies Record<EventName, ClientEventContract>;
@@ -51,6 +58,7 @@ export type ClientEventResult<E extends ClientEventName> = z.output<(typeof CLIE
 export const SERVER_EVENTS = {
     'room:state': roomStateSchema,
     'fun:thrown': funThrownSchema,
+    'fun:reacted': funReactedSchema,
     'roulette:spun': rouletteSpunSchema,
 } as const satisfies Record<EventName, z.ZodType>;
 

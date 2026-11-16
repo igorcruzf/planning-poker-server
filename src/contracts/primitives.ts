@@ -37,7 +37,7 @@ export const durationMsSchema = z.number().int().nonnegative();
 
 export const PERSON_NAME_MAX_LENGTH = 30;
 export const ROOM_NAME_MAX_LENGTH = 30;
-const FORBIDDEN_CHARACTER = /[\p{Cc}\p{Cf}]/u;
+const FORBIDDEN_CHARACTER = /(?![\u200C\u200D])[\p{Cc}\p{Cf}]/u;
 
 export const boundedTextSchema = (maxLength: number) =>
     z

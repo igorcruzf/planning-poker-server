@@ -120,8 +120,11 @@ describe('texto do card do Jira limitado', () => {
 });
 
 describe('nome de pessoa sem caracteres de formatação', () => {
-    it.each([['\u200B\u200B'], ['Ana\u200B'], ['\u202EAna'], ['An\u0007a']])('rejeita %j', (name) => {
+    it.each([['\u200B\u200B'], ['Ana\u200B'], ['\u202EAna'], ['An\u0007a'], ['Ana\u2066'], ['An\uFEFFa'], ['Ana\u200E']])('rejeita %j', (name) => {
         expect(personNameSchema.safeParse(name).success).toBe(false);
+    });
+    it.each([['👨\u200D👩\u200D👧'], ['🏳\uFE0F\u200D🌈'], ['می\u200Cخواهم']])('aceita ZWJ e ZWNJ em %j', (name) => {
+        expect(personNameSchema.safeParse(name).success).toBe(true);
     });
 
     it('mantém nomes comuns com acento', () => {

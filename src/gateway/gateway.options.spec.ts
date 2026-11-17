@@ -23,7 +23,7 @@ describe('gatewayOptions', () => {
         expect(gatewayOptions().cors).toEqual({ origin: ['http://localhost:5173', 'http://localhost:5174'] });
     });
 
-    it('keeps the Socket.IO default limit of 1 MB per message', () => {
-        expect(gatewayOptions().maxHttpBufferSize).toBe(1_000_000);
+    it('limits each message to 16 KB', () => {
+        expect(gatewayOptions().maxHttpBufferSize).toBe(16 * 1024);
     });
 });

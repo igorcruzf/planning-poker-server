@@ -1,9 +1,9 @@
 import { GatewayMetadata } from '@nestjs/websockets';
 import { corsOrigin } from '../cors-origin';
 
-const SOCKET_IO_DEFAULT_MAX_HTTP_BUFFER_SIZE = 1_000_000;
+const MAX_HTTP_BUFFER_SIZE_BYTES = 16 * 1024;
 
 export const gatewayOptions = (): GatewayMetadata => ({
     cors: { origin: corsOrigin() },
-    maxHttpBufferSize: SOCKET_IO_DEFAULT_MAX_HTTP_BUFFER_SIZE,
+    maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE_BYTES,
 });

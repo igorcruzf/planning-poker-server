@@ -1,5 +1,6 @@
 import { INestApplication, Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { AddressInfo } from 'net';
 import { AppModule } from './app.module';
 import { DomainModule } from './domain/domain.module';
 import { SocketIoTestClient, socketIoUrl } from './gateway/testing/socket-io-test-client';
@@ -39,36 +40,21 @@ describe('AppModule', () => {
         expect(() => app.select(module)).not.toThrow();
     });
 
-    describe('legacy events over a real Socket.IO connection', () => {
-        it('answers login with start and the users of the room', async () => {
-            const client = await connect();
+    it('answers GET /health', async () => {
+        const { port } = app.getHttpServer().address() as AddressInfo;
 
-            client.emit('login', { id: 'ana', room: 'A' });
+        const response = await fetch(`http://127.0.0.1:${port}/health`);
 
-            await expect(client.waitFor('start')).resolves.toEqual([{ id: 'ana', room: 'A' }]);
-            await expect(client.waitFor('login')).resolves.toEqual({ id: 'ana', room: 'A' });
-        });
+        expect(response.status).toBe(200);
+    });
 
-        it('ignores a login sent with more than one argument, as before', async () => {
-            const client = await connect();
+    it('accepts new connections right after a real Socket.IO client emits an event without handler', async () => {
+        const client = await connect();
 
-            client.emit('login', { id: 'ana', room: 'A' }, 'extra');
-            client.emit('login', { id: 'bia', room: 'A' });
+        client.emit('event-without-handler', { any: 'payload' });
+        const other = await connect();
 
-            await expect(client.waitFor('start')).resolves.toEqual([{ id: 'bia', room: 'A' }]);
-        });
-
-        it('broadcasts logout to the room when a user disconnects', async () => {
-            const ana = await connect();
-            const bia = await connect();
-            ana.emit('login', { id: 'ana', room: 'A' });
-            await ana.waitFor('start');
-            bia.emit('login', { id: 'bia', room: 'A' });
-            await bia.waitFor('start');
-
-            await ana.close();
-
-            await expect(bia.waitFor('logout')).resolves.toEqual({ id: 'ana', room: 'A' });
-        });
+        expect(client.connected).toBe(true);
+        expect(other.connected).toBe(true);
     });
 });

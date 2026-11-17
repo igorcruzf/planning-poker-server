@@ -176,6 +176,17 @@ export class Room {
         return { participantId: participant.id, sessionToken };
     }
 
+    authenticate(sessionToken: string): ParticipantView {
+        return toParticipantView(this.requireSessionOwner(sessionToken));
+    }
+
+    setUmbrella(participantId: string, enabled: boolean): boolean {
+        const participant = this.requireHuman(participantId);
+        if (participant.umbrella === enabled) return false;
+        participant.umbrella = enabled;
+        return true;
+    }
+
     markConnected(participantId: string): void {
         const participant = this.requireSeat(participantId);
         participant.presence = 'connected';
@@ -359,12 +370,17 @@ export class Room {
     }
 
     private reconnect(sessionToken: string): { participantId: string; sessionToken: string } {
+        const participant = this.requireSessionOwner(sessionToken);
+        this.markConnected(participant.id);
+        return { participantId: participant.id, sessionToken };
+    }
+
+    private requireSessionOwner(sessionToken: string): Participant {
         const participant = this.roster.find(
             (candidate) => candidate.tokenHash !== null && secretMatchesHash(sessionToken, candidate.tokenHash),
         );
         if (!participant) throw domainErrors.sessionTokenInvalid();
-        this.markConnected(participant.id);
-        return { participantId: participant.id, sessionToken };
+        return participant;
     }
 
     private seat(details: Pick<Participant, 'name' | 'role'> & Partial<Pick<Participant, 'ownerId' | 'tokenHash'>>) {

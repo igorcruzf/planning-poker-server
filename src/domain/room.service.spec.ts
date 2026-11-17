@@ -224,3 +224,49 @@ describe('RoomService', () => {
         expect(errorOf(() => service.redeemKiroInvite(invite.inviteCode))).toEqual({ code: 'invite_invalid' });
     });
 });
+
+describe('RoomService umbrella and authentication', () => {
+    let context: Awaited<ReturnType<typeof NestFactory.createApplicationContext>>;
+    let service: RoomService;
+    let changes: RoomChange[];
+
+    beforeEach(async () => {
+        context = await NestFactory.createApplicationContext(DomainModule, { logger: false });
+        service = context.get(RoomService);
+        changes = [];
+    });
+
+    afterEach(() => context.close());
+
+    it('reflects the umbrella in the snapshot and notifies only when it changed', () => {
+        const owner = service.createRoom(createPayload());
+        service.onChange((change) => changes.push(change));
+
+        service.setUmbrella(owner.roomCode, owner.participantId, true);
+        service.setUmbrella(owner.roomCode, owner.participantId, true);
+
+        expect(service.snapshot(owner.roomCode, owner.participantId).participants[0].umbrella).toBe(true);
+        expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'umbrella_changed' }]);
+    });
+
+    it('authenticates a session token without notifying or touching presence', () => {
+        const owner = service.createRoom(createPayload());
+        service.disconnect(owner.roomCode, owner.participantId);
+        service.onChange((change) => changes.push(change));
+
+        const view = service.authenticate(owner.roomCode, owner.sessionToken);
+
+        expect(view.id).toBe(owner.participantId);
+        expect(view.presence).toBe('disconnected');
+        expect(changes).toEqual([]);
+    });
+
+    it('refuses a wrong token and an unknown room', () => {
+        const owner = service.createRoom(createPayload());
+
+        expect(errorOf(() => service.authenticate(owner.roomCode, 'wrong'))).toEqual({ code: 'session_token_invalid' });
+        expect(errorOf(() => service.authenticate('yak-zzzzzzzz', owner.sessionToken))).toMatchObject({
+            code: 'room_not_found',
+        });
+    });
+});

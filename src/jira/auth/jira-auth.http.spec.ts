@@ -12,7 +12,7 @@ import {
     jiraSessionResponseSchema,
 } from '../../contracts';
 import { AppModule } from '../../app.module';
-import { JiraLoginService } from './jira-login.service';
+import { CALLBACK_RATE_LIMIT, JiraLoginService, LOGIN_RATE_LIMIT } from './jira-login.service';
 import { jiraAuthModuleMetadata, JiraAuthModule } from './jira-auth.module';
 import { JiraSessionService } from './jira-session.service';
 import { JiraAuthConfig } from './jira-auth.config';
@@ -202,7 +202,7 @@ describe('Jira auth endpoints', () => {
         it('does not allocate state for anonymous logins', async () => {
             await start();
             for (let index = 0; index < 1200; index += 1) {
-                app.get(JiraLoginService).beginLogin();
+                app.get(JiraLoginService).beginLogin(`10.0.0.${index}`);
             }
             const front = await loginUntilCode();
             expect(front.searchParams.get('jira')).toBeTruthy();
@@ -459,6 +459,54 @@ describe('Jira auth endpoints', () => {
         ])('is idempotent and silent %s', async (_, headers) => {
             await start();
             expect((await post('/api/auth/jira/logout', undefined, headers)).status).toBe(204);
+        });
+    });
+
+    describe('rate limits per client address', () => {
+        const from = (address: string) => ({ headers: { 'X-Forwarded-For': address } });
+
+        it('answers 429 rate_limited on login after the limit and keeps other addresses working', async () => {
+            await start();
+            for (let attempt = 0; attempt < LOGIN_RATE_LIMIT.limit; attempt += 1) {
+                expect((await get('/api/auth/jira/login', from('203.0.113.1'))).status).toBe(302);
+            }
+            const blocked = await get('/api/auth/jira/login', from('203.0.113.1'));
+            expect(blocked.status).toBe(429);
+            expect(blocked.headers.get('set-cookie')).toBeNull();
+            expect((await blocked.json()).error).toEqual({
+                code: 'rate_limited',
+                retryAfterMs: LOGIN_RATE_LIMIT.windowMs,
+            });
+            expect((await get('/api/auth/jira/login', from('203.0.113.2'))).status).toBe(302);
+            now += LOGIN_RATE_LIMIT.windowMs;
+            expect((await get('/api/auth/jira/login', from('203.0.113.1'))).status).toBe(302);
+        });
+
+        it('redirects the callback to jira_login_failed after the limit without calling Atlassian', async () => {
+            await start();
+            for (let attempt = 0; attempt < CALLBACK_RATE_LIMIT.limit; attempt += 1) {
+                expect((await get('/api/auth/jira/callback?error=x', from('203.0.113.1'))).status).toBe(302);
+            }
+            const { location, cookie } = await loginState();
+            const blocked = await get(`/api/auth/jira/callback?code=c&state=${location.searchParams.get('state')}`, {
+                headers: { 'X-Forwarded-For': '203.0.113.1', Cookie: cookie },
+            });
+            expect(blocked.status).toBe(302);
+            expect(blocked.headers.get('location')).toBe(failedRedirect);
+            expect(atlassianCalls).toHaveLength(0);
+        });
+
+        it('lets a valid login complete from another address while one address is blocked', async () => {
+            await start();
+            for (let attempt = 0; attempt <= CALLBACK_RATE_LIMIT.limit; attempt += 1) {
+                await get('/api/auth/jira/callback?error=x', from('203.0.113.1'));
+            }
+            const { location, cookie } = await loginState();
+            const state = location.searchParams.get('state');
+            const completed = await get(`/api/auth/jira/callback?code=c&state=${state}`, {
+                headers: { 'X-Forwarded-For': '203.0.113.9', Cookie: cookie },
+            });
+            expect(new URL(completed.headers.get('location')!).searchParams.get('jira')).not.toBeNull();
         });
     });
 

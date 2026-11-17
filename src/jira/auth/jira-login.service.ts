@@ -8,9 +8,10 @@ import {
     JiraLoginError,
     ROOM_LINK_QUERY_PARAM,
 } from '../../contracts';
+import { RateLimiter, RateWindow } from '../../gateway/session/rate-limiter';
 import { AtlassianAuthClient } from './atlassian-auth.client';
 import { clearBindCookie, readBindCookie, serializeBindCookie } from './bind-cookie';
-import { jiraError } from './jira-app.exception';
+import { jiraError, rateLimitedError } from './jira-app.exception';
 import type { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
 import type { Clock } from './jira-auth.tokens';
 import { JIRA_AUTH_CONFIG, JIRA_CLOCK } from './jira-auth.tokens';
@@ -19,6 +20,8 @@ import { ConsumedNonces, LoginStateSigner } from './login-state';
 import { OneTimeStore } from './one-time-store';
 
 export const MAX_PENDING_LOGIN_CODES = 1000;
+export const LOGIN_RATE_LIMIT: RateWindow = { limit: 20, windowMs: 60_000 };
+export const CALLBACK_RATE_LIMIT: RateWindow = { limit: 30, windowMs: 60_000 };
 
 const AUTHORIZE_URL = 'https://auth.atlassian.com/authorize';
 
@@ -48,6 +51,8 @@ export class JiraLoginService {
     private readonly logger = new Logger(JiraLoginService.name);
     private readonly codes: OneTimeStore<IssuedSession>;
     private readonly consumedStates: ConsumedNonces;
+    private readonly loginLimiter: RateLimiter;
+    private readonly callbackLimiter: RateLimiter;
     private readonly signer?: LoginStateSigner;
 
     constructor(
@@ -62,6 +67,8 @@ export class JiraLoginService {
             clock,
         });
         this.consumedStates = new ConsumedNonces(clock);
+        this.loginLimiter = new RateLimiter(LOGIN_RATE_LIMIT, { now: clock });
+        this.callbackLimiter = new RateLimiter(CALLBACK_RATE_LIMIT, { now: clock });
         this.signer = config.enabled ? new LoginStateSigner(config.encryptionKey, clock) : undefined;
     }
 
@@ -69,8 +76,12 @@ export class JiraLoginService {
         return this.config.enabled;
     }
 
-    beginLogin(mesa?: string): LoginStart {
+    beginLogin(address: string, mesa?: string): LoginStart {
         const config = this.requireEnabled();
+        const retryAfterMs = this.loginLimiter.consume(address);
+        if (retryAfterMs !== null) {
+            throw rateLimitedError('rate_limited', retryAfterMs);
+        }
         const { state, bind } = this.signer!.issue(mesa);
         const url = new URL(AUTHORIZE_URL);
         url.search = new URLSearchParams({
@@ -88,9 +99,12 @@ export class JiraLoginService {
         };
     }
 
-    async completeLogin(query: unknown, cookieHeader?: string): Promise<LoginCompletion> {
+    async completeLogin(address: string, query: unknown, cookieHeader?: string): Promise<LoginCompletion> {
         const config = this.requireEnabled();
         const setCookie = clearBindCookie(this.secureCookie(config));
+        if (this.callbackLimiter.consume(address) !== null) {
+            return { url: this.errorRedirect('jira_login_failed'), setCookie };
+        }
         return { url: await this.resolveCallback(query, cookieHeader), setCookie };
     }
 

@@ -1,4 +1,4 @@
-import { corsOrigin, DEFAULT_CORS_ORIGINS } from './cors-origin';
+import { corsOptions, corsOrigin, DEFAULT_CORS_ORIGINS } from './cors-origin';
 
 const PRODUCTION_FRONT = 'https://yak-planning-poker.onrender.com';
 
@@ -22,5 +22,18 @@ describe('corsOrigin', () => {
 
     it('exposes the default origin list', () => {
         expect(DEFAULT_CORS_ORIGINS).toEqual([PRODUCTION_FRONT]);
+    });
+});
+
+describe('corsOptions', () => {
+    it('keeps the configured origins', () => {
+        expect(corsOptions('https://a.app, https://b.app').origin).toEqual(['https://a.app', 'https://b.app']);
+        expect(corsOptions(undefined).origin).toBe(PRODUCTION_FRONT);
+    });
+    it('allows the headers sent by the front', () => {
+        expect(corsOptions().allowedHeaders).toEqual(['Authorization', 'Content-Type', 'X-Yak-Room-Session']);
+    });
+    it('exposes the refreshed Jira session header', () => {
+        expect(corsOptions().exposedHeaders).toEqual(['X-Yak-Jira-Session']);
     });
 });

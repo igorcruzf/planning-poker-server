@@ -1,0 +1,180 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { z } from 'zod';
+import {
+    JIRA_LOGIN_CODE_QUERY_PARAM,
+    JIRA_LOGIN_CODE_TTL_MS,
+    JIRA_LOGIN_ERROR_QUERY_PARAM,
+    JIRA_OAUTH_SCOPES,
+    JiraLoginError,
+    ROOM_LINK_QUERY_PARAM,
+} from '../../contracts';
+import { AtlassianAuthClient } from './atlassian-auth.client';
+import { clearBindCookie, readBindCookie, serializeBindCookie } from './bind-cookie';
+import { jiraError } from './jira-app.exception';
+import type { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
+import type { Clock } from './jira-auth.tokens';
+import { JIRA_AUTH_CONFIG, JIRA_CLOCK } from './jira-auth.tokens';
+import { JiraSessionService } from './jira-session.service';
+import { ConsumedNonces, LoginStateSigner } from './login-state';
+import { OneTimeStore } from './one-time-store';
+
+export const MAX_PENDING_LOGIN_CODES = 1000;
+
+const AUTHORIZE_URL = 'https://auth.atlassian.com/authorize';
+
+const callbackQuerySchema = z.object({
+    code: z.string().min(1).max(2048).optional(),
+    state: z.string().min(1).max(512).optional(),
+    error: z.string().max(256).optional(),
+});
+
+interface IssuedSession {
+    blob: string;
+    siteUrl: string;
+}
+
+export interface LoginStart {
+    url: string;
+    setCookie: string;
+}
+
+export interface LoginCompletion {
+    url: string;
+    setCookie: string;
+}
+
+@Injectable()
+export class JiraLoginService {
+    private readonly logger = new Logger(JiraLoginService.name);
+    private readonly codes: OneTimeStore<IssuedSession>;
+    private readonly consumedStates: ConsumedNonces;
+    private readonly signer?: LoginStateSigner;
+
+    constructor(
+        @Inject(JIRA_AUTH_CONFIG) private readonly config: JiraAuthConfig,
+        private readonly client: AtlassianAuthClient,
+        private readonly sessions: JiraSessionService,
+        @Inject(JIRA_CLOCK) clock: Clock,
+    ) {
+        this.codes = new OneTimeStore({
+            ttlMs: JIRA_LOGIN_CODE_TTL_MS,
+            maxEntries: MAX_PENDING_LOGIN_CODES,
+            clock,
+        });
+        this.consumedStates = new ConsumedNonces(clock);
+        this.signer = config.enabled ? new LoginStateSigner(config.encryptionKey, clock) : undefined;
+    }
+
+    get enabled(): boolean {
+        return this.config.enabled;
+    }
+
+    beginLogin(mesa?: string): LoginStart {
+        const config = this.requireEnabled();
+        const { state, bind } = this.signer!.issue(mesa);
+        const url = new URL(AUTHORIZE_URL);
+        url.search = new URLSearchParams({
+            audience: 'api.atlassian.com',
+            client_id: config.clientId,
+            scope: JIRA_OAUTH_SCOPES.join(' '),
+            redirect_uri: config.redirectUri,
+            state,
+            response_type: 'code',
+            prompt: 'consent',
+        }).toString();
+        return {
+            url: url.toString(),
+            setCookie: serializeBindCookie(bind, this.secureCookie(config)),
+        };
+    }
+
+    async completeLogin(query: unknown, cookieHeader?: string): Promise<LoginCompletion> {
+        const config = this.requireEnabled();
+        const setCookie = clearBindCookie(this.secureCookie(config));
+        return { url: await this.resolveCallback(query, cookieHeader), setCookie };
+    }
+
+    redeemCode(code: string): IssuedSession {
+        this.requireEnabled();
+        const issued = this.codes.take(code);
+        if (!issued) {
+            throw jiraError('jira_login_code_invalid');
+        }
+        return issued;
+    }
+
+    errorRedirect(error: JiraLoginError): string {
+        return this.frontRedirect({ [JIRA_LOGIN_ERROR_QUERY_PARAM]: error });
+    }
+
+    sweep(): void {
+        this.codes.sweep();
+        this.consumedStates.sweep();
+    }
+
+    private async resolveCallback(query: unknown, cookieHeader?: string): Promise<string> {
+        const parsed = callbackQuerySchema.safeParse(query);
+        const verified =
+            parsed.success && parsed.data.state
+                ? this.signer!.verify(parsed.data.state, readBindCookie(cookieHeader))
+                : undefined;
+        if (!parsed.success || !verified) {
+            return this.failed('state_invalid');
+        }
+        if (!this.consumedStates.consume(verified.nonce, verified.expiresAt)) {
+            return this.failed('state_reused_or_store_full');
+        }
+        if (parsed.data.error || !parsed.data.code) {
+            return this.failed('consent_denied');
+        }
+        try {
+            const code = await this.issueLoginCode(parsed.data.code);
+            return code ? this.successRedirect(code, verified.mesa) : this.failed('code_store_full');
+        } catch (error) {
+            return this.failed('exchange_failed', error);
+        }
+    }
+
+    private async issueLoginCode(authorizationCode: string): Promise<string | undefined> {
+        const tokens = await this.client.exchangeCode(authorizationCode);
+        const profile = await this.client.fetchProfile(tokens.accessToken);
+        const blob = this.sessions.createBlob({
+            refreshToken: tokens.refreshToken,
+            cloudId: profile.cloudId,
+            accountId: profile.accountId,
+            siteUrl: profile.siteUrl,
+        });
+        this.sessions.prime(blob, tokens.accessToken, tokens.expiresInMs);
+        return this.codes.put({ blob, siteUrl: profile.siteUrl });
+    }
+
+    private successRedirect(code: string, mesa?: string): string {
+        return this.frontRedirect({
+            ...(mesa ? { [ROOM_LINK_QUERY_PARAM]: mesa } : {}),
+            [JIRA_LOGIN_CODE_QUERY_PARAM]: code,
+        });
+    }
+
+    private failed(reason: string, error?: unknown): string {
+        const cause = error instanceof Error ? ` (${error.name})` : '';
+        this.logger.warn(`Jira login failed: ${reason}${cause}`);
+        return this.errorRedirect('jira_login_failed');
+    }
+
+    private frontRedirect(params: Record<string, string>): string {
+        const url = new URL('/', this.config.frontUrl);
+        url.search = new URLSearchParams(params).toString();
+        return url.toString();
+    }
+
+    private secureCookie(config: JiraEnabledConfig): boolean {
+        return new URL(config.redirectUri).protocol === 'https:';
+    }
+
+    private requireEnabled(): JiraEnabledConfig {
+        if (!this.config.enabled) {
+            throw jiraError('jira_disabled');
+        }
+        return this.config;
+    }
+}

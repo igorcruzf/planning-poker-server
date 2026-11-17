@@ -48,7 +48,7 @@ describe('AppModule', () => {
         expect(response.status).toBe(200);
     });
 
-    it('keeps serving after a real Socket.IO client emits an event without handler', async () => {
+    it('accepts new connections right after a real Socket.IO client emits an event without handler', async () => {
         const client = await connect();
 
         client.emit('event-without-handler', { any: 'payload' });

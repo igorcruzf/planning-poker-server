@@ -14,7 +14,7 @@ describe('AppModule', () => {
     let clients: SocketIoTestClient[];
 
     const connect = async () => {
-        const client = await SocketIoTestClient.connect(socketIoUrl(app));
+        const client = await SocketIoTestClient.connect(socketIoUrl(app), { auth: { protocolVersion: '1.0' } });
         clients.push(client);
         return client;
     };

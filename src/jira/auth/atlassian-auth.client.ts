@@ -42,7 +42,13 @@ const tokenResponseSchema = z.object({
     expires_in: z.number().positive(),
 });
 const resourcesSchema = z
-    .array(z.object({ id: z.string().min(1), url: httpUrlSchema, scopes: z.array(z.string()).default([]) }))
+    .array(
+        z.object({
+            id: z.string().min(1),
+            url: httpUrlSchema,
+            scopes: z.array(z.string()).default([]),
+        }),
+    )
     .min(1);
 const meSchema = z.object({ account_id: z.string().min(1) });
 
@@ -93,7 +99,10 @@ export class AtlassianAuthClient {
     }
 
     async fetchProfile(accessToken: string): Promise<AtlassianProfile> {
-        const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
+        const headers = {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/json',
+        };
         const resources = resourcesSchema.safeParse(await this.getJson(ACCESSIBLE_RESOURCES_URL, headers));
         const me = meSchema.safeParse(await this.getJson(ME_URL, headers));
         if (!resources.success || !me.success) {
@@ -105,13 +114,20 @@ export class AtlassianAuthClient {
         if (!site) {
             throw new AtlassianAuthFailure('invalid_response');
         }
-        return { cloudId: site.id, siteUrl: site.url, accountId: me.data.account_id };
+        return {
+            cloudId: site.id,
+            siteUrl: site.url,
+            accountId: me.data.account_id,
+        };
     }
 
     private async requestTokens(body: Record<string, string>, requireRefreshToken = true): Promise<AtlassianTokens> {
         const json = await this.send(TOKEN_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+            },
             body: JSON.stringify(body),
         });
         const parsed = tokenResponseSchema.safeParse(json);

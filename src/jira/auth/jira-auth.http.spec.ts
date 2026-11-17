@@ -12,7 +12,7 @@ import {
     jiraSessionResponseSchema,
 } from '../../contracts';
 import { AppModule } from '../../app.module';
-import { JiraLoginService, MAX_PENDING_LOGINS } from './jira-login.service';
+import { JiraLoginService } from './jira-login.service';
 import { jiraAuthModuleMetadata, JiraAuthModule } from './jira-auth.module';
 import { JiraSessionService } from './jira-session.service';
 import { JiraAuthConfig } from './jira-auth.config';
@@ -37,7 +37,10 @@ class LogCollector implements LoggerService {
 }
 
 const jsonResponse = (body: unknown, status = 200) =>
-    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+    });
 
 describe('Jira auth endpoints', () => {
     let app: INestApplication;
@@ -70,7 +73,13 @@ describe('Jira auth endpoints', () => {
             return refreshHandler();
         }
         if (url.endsWith('/accessible-resources')) {
-            return jsonResponse([{ id: 'cloud-1', url: 'https://acme.atlassian.net' }]);
+            return jsonResponse([
+                {
+                    id: 'cloud-1',
+                    url: 'https://acme.atlassian.net',
+                    scopes: ['read:jira-work'],
+                },
+            ]);
         }
         return jsonResponse({ account_id: 'account-1' });
     };
@@ -100,15 +109,20 @@ describe('Jira auth endpoints', () => {
 
     const loginState = async (mesa?: string) => {
         const response = await get(`/api/auth/jira/login${mesa ? `?mesa=${mesa}` : ''}`);
-        return { response, location: new URL(response.headers.get('location')!) };
+        const cookie = (response.headers.get('set-cookie') ?? '').split(';')[0];
+        return {
+            response,
+            location: new URL(response.headers.get('location')!),
+            cookie,
+        };
     };
 
-    const callback = async (state: string, code = 'auth-code') =>
-        get(`/api/auth/jira/callback?code=${code}&state=${state}`);
+    const callback = async (state: string, cookie?: string, code = 'auth-code') =>
+        get(`/api/auth/jira/callback?code=${code}&state=${state}`, cookie ? { headers: { Cookie: cookie } } : {});
 
     const loginUntilCode = async (mesa?: string) => {
-        const { location } = await loginState(mesa);
-        const response = await callback(location.searchParams.get('state')!);
+        const { location, cookie } = await loginState(mesa);
+        const response = await callback(location.searchParams.get('state')!, cookie);
         return new URL(response.headers.get('location')!);
     };
 
@@ -127,9 +141,17 @@ describe('Jira auth endpoints', () => {
         refreshCount = 0;
         sleeps = [];
         tokenExchangeResponse = () =>
-            jsonResponse({ access_token: 'AT-initial', refresh_token: 'RT-initial', expires_in: 3600 });
+            jsonResponse({
+                access_token: 'AT-initial',
+                refresh_token: 'RT-initial',
+                expires_in: 3600,
+            });
         refreshHandler = () =>
-            jsonResponse({ access_token: `AT-${refreshCount}`, refresh_token: `RT-${refreshCount}`, expires_in: 3600 });
+            jsonResponse({
+                access_token: `AT-${refreshCount}`,
+                refresh_token: `RT-${refreshCount}`,
+                expires_in: 3600,
+            });
     });
 
     afterEach(async () => {
@@ -150,8 +172,40 @@ describe('Jira auth endpoints', () => {
                 response_type: 'code',
                 prompt: 'consent',
             });
-            expect(location.searchParams.get('state')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(location.searchParams.get('state')).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/);
             expect(location.href).not.toContain(CLIENT_SECRET);
+        });
+
+        it('binds the login to the browser with a restricted cookie', async () => {
+            await start();
+            const { response, cookie } = await loginState();
+            expect(cookie).toMatch(/^yak_jira_bind=[A-Za-z0-9_-]{43}$/);
+            const attributes = response.headers.get('set-cookie')!.split('; ').slice(1);
+            expect(attributes.sort()).toEqual([
+                'HttpOnly',
+                'Max-Age=600',
+                'Path=/api/auth/jira',
+                'SameSite=Lax',
+                'Secure',
+            ]);
+        });
+
+        it('omits Secure on the cookie when the redirect uri is not https', async () => {
+            await start({
+                ...config,
+                redirectUri: 'http://localhost:3000/api/auth/jira/callback',
+            });
+            const { response } = await loginState();
+            expect(response.headers.get('set-cookie')).not.toContain('Secure');
+        });
+
+        it('does not allocate state for anonymous logins', async () => {
+            await start();
+            for (let index = 0; index < 1200; index += 1) {
+                app.get(JiraLoginService).beginLogin();
+            }
+            const front = await loginUntilCode();
+            expect(front.searchParams.get('jira')).toBeTruthy();
         });
 
         it('rejects an invalid mesa with the schema error', async () => {
@@ -160,19 +214,29 @@ describe('Jira auth endpoints', () => {
             expect(response.status).toBe(ERROR_HTTP_STATUS.invalid_payload);
             expect(httpErrorBodySchema.parse(await response.json()).error.code).toBe('invalid_payload');
         });
+    });
 
-        it('refuses new logins with 429 when too many are pending', async () => {
+    describe('cache headers', () => {
+        it('marks every endpoint response as no-store', async () => {
             await start();
-            const login = app.get(JiraLoginService);
-            for (let index = 0; index < MAX_PENDING_LOGINS; index += 1) {
-                login.beginLogin();
+            const { response, location, cookie } = await loginState();
+            const callbackResponse = await callback(location.searchParams.get('state')!, cookie);
+            const code = new URL(callbackResponse.headers.get('location')!).searchParams.get('jira')!;
+            const session = await post('/api/auth/jira/session', { code });
+            const blob = session.headers.get(JIRA_SESSION_HEADER)!;
+            const logout = await post('/api/auth/jira/logout', undefined, {
+                Authorization: `Bearer ${blob}`,
+            });
+            const status = await get('/api/jira/status');
+            for (const each of [response, callbackResponse, session, logout, status]) {
+                expect(each.headers.get('cache-control')).toBe('no-store');
             }
-            const response = await get('/api/auth/jira/login');
-            expect(response.status).toBe(429);
-            expect(httpErrorBodySchema.parse(await response.json()).error.code).toBe('rate_limited');
-            now += JIRA_OAUTH_STATE_TTL_MS;
-            login.sweep();
-            expect((await get('/api/auth/jira/login')).status).toBe(302);
+        });
+
+        it('marks the disabled redirects as no-store', async () => {
+            await start({ enabled: false, frontUrl: FRONT });
+            expect((await get('/api/auth/jira/login')).headers.get('cache-control')).toBe('no-store');
+            expect((await get('/api/auth/jira/callback')).headers.get('cache-control')).toBe('no-store');
         });
     });
 
@@ -192,7 +256,9 @@ describe('Jira auth endpoints', () => {
             const session = await post('/api/auth/jira/session', { code: loginCode });
             expect(session.status).toBe(200);
             const body = await session.json();
-            expect(jiraSessionResponseSchema.parse(body)).toEqual({ siteUrl: 'https://acme.atlassian.net' });
+            expect(jiraSessionResponseSchema.parse(body)).toEqual({
+                siteUrl: 'https://acme.atlassian.net',
+            });
             expect(Object.keys(body)).toEqual(['siteUrl']);
             const blob = session.headers.get(JIRA_SESSION_HEADER)!;
             expect(blob).toBeTruthy();
@@ -202,12 +268,17 @@ describe('Jira auth endpoints', () => {
                 accessToken: 'AT-initial',
                 cloudId: 'cloud-1',
                 accountId: 'account-1',
+                siteUrl: 'https://acme.atlassian.net',
             });
             expect(refreshCount).toBe(0);
 
             now += HOUR;
             const renewed = await sessions.getAccessToken(blob);
-            expect(renewed).toMatchObject({ accessToken: 'AT-1', cloudId: 'cloud-1', accountId: 'account-1' });
+            expect(renewed).toMatchObject({
+                accessToken: 'AT-1',
+                cloudId: 'cloud-1',
+                accountId: 'account-1',
+            });
             const codec = new SessionBlobCodec(encryptionKey);
             expect(codec.decode(renewed.refreshedBlob!).refreshToken).toBe('RT-1');
             expect(atlassianCalls.find((call) => call.body?.grant_type === 'refresh_token')?.body?.refresh_token).toBe(
@@ -245,43 +316,86 @@ describe('Jira auth endpoints', () => {
 
         it('rejects an expired state', async () => {
             await start();
-            const { location } = await loginState();
+            const { location, cookie } = await loginState();
             now += JIRA_OAUTH_STATE_TTL_MS;
-            await expectFailed(await callback(location.searchParams.get('state')!));
+            await expectFailed(await callback(location.searchParams.get('state')!, cookie));
             expect(atlassianCalls).toEqual([]);
         });
 
-        it('rejects a reused state', async () => {
+        it('rejects a reused state even when the browser sends the cookie again', async () => {
             await start();
-            const { location } = await loginState();
+            const { location, cookie } = await loginState();
             const state = location.searchParams.get('state')!;
-            expect((await callback(state)).headers.get('location')).not.toBe(failedRedirect);
+            expect((await callback(state, cookie)).headers.get('location')).not.toBe(failedRedirect);
             atlassianCalls.length = 0;
-            await expectFailed(await callback(state));
+            await expectFailed(await callback(state, cookie));
             expect(atlassianCalls).toEqual([]);
         });
 
         it('fails and burns the state when the user denies consent', async () => {
             await start();
-            const { location } = await loginState();
+            const { location, cookie } = await loginState();
             const state = location.searchParams.get('state')!;
-            await expectFailed(await get(`/api/auth/jira/callback?error=access_denied&state=${state}`));
-            await expectFailed(await callback(state));
+            await expectFailed(
+                await get(`/api/auth/jira/callback?error=access_denied&state=${state}`, {
+                    headers: { Cookie: cookie },
+                }),
+            );
+            await expectFailed(await callback(state, cookie));
             expect(atlassianCalls).toEqual([]);
         });
 
         it('fails when the token exchange fails', async () => {
             await start();
             tokenExchangeResponse = () => jsonResponse({ error: 'invalid_grant' }, 400);
-            const { location } = await loginState();
-            await expectFailed(await callback(location.searchParams.get('state')!));
+            const { location, cookie } = await loginState();
+            await expectFailed(await callback(location.searchParams.get('state')!, cookie));
         });
 
         it('rejects repeated or non-string query parameters', async () => {
             await start();
-            const { location } = await loginState();
+            const { location, cookie } = await loginState();
             const state = location.searchParams.get('state')!;
-            await expectFailed(await get(`/api/auth/jira/callback?code=a&code=b&state=${state}`));
+            await expectFailed(
+                await get(`/api/auth/jira/callback?code=a&code=b&state=${state}`, {
+                    headers: { Cookie: cookie },
+                }),
+            );
+        });
+
+        it('rejects a callback from a browser that did not start the login (login CSRF)', async () => {
+            await start();
+            const attacker = await loginState();
+            const victim = await loginState();
+            const state = attacker.location.searchParams.get('state')!;
+            await expectFailed(await callback(state));
+            await expectFailed(await callback(state, victim.cookie));
+            await expectFailed(await callback(state, 'yak_jira_bind=forjado'));
+            expect(atlassianCalls).toEqual([]);
+        });
+
+        it('still accepts the legitimate browser after a failed attempt with a wrong cookie', async () => {
+            await start();
+            const { location, cookie } = await loginState();
+            const state = location.searchParams.get('state')!;
+            await expectFailed(await callback(state));
+            expect((await callback(state, cookie)).headers.get('location')).not.toBe(failedRedirect);
+        });
+
+        it('rejects a state signed with a forged payload', async () => {
+            await start();
+            const { location, cookie } = await loginState(MESA);
+            const [, signature] = location.searchParams.get('state')!.split('.');
+            const forged = Buffer.from(JSON.stringify({ n: 'x', exp: now + 1_000_000, b: 'x' })).toString('base64url');
+            await expectFailed(await callback(`${forged}.${signature}`, cookie));
+            expect(atlassianCalls).toEqual([]);
+        });
+
+        it('clears the bind cookie on the callback', async () => {
+            await start();
+            const { location, cookie } = await loginState();
+            const response = await callback(location.searchParams.get('state')!, cookie);
+            expect(response.headers.get('set-cookie')).toMatch(/^yak_jira_bind=; .*Max-Age=0/);
         });
     });
 
@@ -328,7 +442,9 @@ describe('Jira auth endpoints', () => {
         it('answers 204 and drops the cached access token', async () => {
             await start();
             const { blob } = await openSession();
-            const response = await post('/api/auth/jira/logout', undefined, { Authorization: `Bearer ${blob}` });
+            const response = await post('/api/auth/jira/logout', undefined, {
+                Authorization: `Bearer ${blob}`,
+            });
             expect(response.status).toBe(204);
             await app.get(JiraSessionService).getAccessToken(blob);
             expect(refreshCount).toBe(1);
@@ -371,14 +487,20 @@ describe('Jira auth endpoints', () => {
 
         it.each(['/api/auth/jira/session', '/api/auth/jira/logout'])('answers jira_disabled on %s', async (path) => {
             await start(disabled);
-            const response = await post(path, { code: randomBytes(32).toString('base64url') });
+            const response = await post(path, {
+                code: randomBytes(32).toString('base64url'),
+            });
             expect(response.status).toBe(503);
-            expect(await response.json()).toEqual({ error: { code: 'jira_disabled' } });
+            expect(await response.json()).toEqual({
+                error: { code: 'jira_disabled' },
+            });
         });
 
         it('reports status disabled', async () => {
             await start(disabled);
-            expect(await (await get('/api/jira/status')).json()).toEqual({ enabled: false });
+            expect(await (await get('/api/jira/status')).json()).toEqual({
+                enabled: false,
+            });
         });
 
         it('lets the AppModule boot without the Jira variables', async () => {
@@ -412,25 +534,31 @@ describe('Jira auth endpoints', () => {
                     }
                 });
             };
-            const { location } = await loginState(MESA);
+            const { location, cookie } = await loginState(MESA);
+            const bind = cookie.split('=')[1];
             const state = location.searchParams.get('state')!;
-            const callbackResponse = await callback(state);
+            const callbackResponse = await callback(state, cookie);
             await track(callbackResponse);
             const code = new URL(callbackResponse.headers.get('location')!).searchParams.get('jira')!;
             const session = await post('/api/auth/jira/session', { code });
             await track(session);
             const blob = session.headers.get(JIRA_SESSION_HEADER)!;
             await track(await post('/api/auth/jira/session', { code }));
-            await track(await callback(state));
+            await track(await callback(state, cookie));
             tokenExchangeResponse = () => jsonResponse({ error: 'invalid_grant', refresh_token: 'RT-initial' }, 400);
-            await track(await callback((await loginState()).location.searchParams.get('state')!));
+            const another = await loginState();
+            await track(await callback(another.location.searchParams.get('state')!, another.cookie));
             refreshHandler = () => jsonResponse({ error: 'invalid_grant', refresh_token: 'RT-initial' }, 400);
             now += HOUR;
             await app
                 .get(JiraSessionService)
                 .getAccessToken(blob)
                 .catch((error) => seen.push(JSON.stringify(error.response)));
-            await track(await post('/api/auth/jira/logout', undefined, { Authorization: `Bearer ${blob}` }));
+            await track(
+                await post('/api/auth/jira/logout', undefined, {
+                    Authorization: `Bearer ${blob}`,
+                }),
+            );
             await track(await get('/api/auth/jira/login?mesa=ruim'));
 
             const tokens = [
@@ -445,7 +573,7 @@ describe('Jira auth endpoints', () => {
             ];
             const logText = logs.lines.join('\n');
             const responseText = seen.join('\n');
-            for (const secret of [...tokens, blob, code, state]) {
+            for (const secret of [...tokens, blob, code, state, bind]) {
                 expect(logText).not.toContain(secret);
             }
             for (const secret of [...tokens, blob]) {

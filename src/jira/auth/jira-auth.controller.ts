@@ -3,16 +3,14 @@ import {
     JIRA_API_PATHS,
     JIRA_AUTH_PATHS,
     JIRA_AUTHORIZATION_HEADER,
-    JIRA_AUTHORIZATION_SCHEME,
     JIRA_SESSION_HEADER,
-    jiraAuthorizationHeaderSchema,
     jiraLoginQuerySchema,
     jiraSessionRequestSchema,
 } from '../../contracts';
 import type { JiraSessionResponse, JiraStatusResponse } from '../../contracts';
 import { JiraAppException, jiraError } from './jira-app.exception';
 import { JiraLoginService } from './jira-login.service';
-import { JiraSessionService } from './jira-session.service';
+import { JiraSessionService, parseBearerBlob } from './jira-session.service';
 
 interface HeaderWriter {
     setHeader(name: string, value: string): void;
@@ -35,24 +33,40 @@ export class JiraAuthController {
     }
 
     @Get(JIRA_AUTH_PATHS.login)
+    @Header('Cache-Control', NO_STORE)
     @Redirect()
-    start(@Query() query: unknown) {
+    start(@Query() query: unknown, @Res({ passthrough: true }) response: HeaderWriter) {
         if (!this.login.enabled) {
-            return { url: this.login.errorRedirect('jira_disabled'), statusCode: FOUND };
+            return {
+                url: this.login.errorRedirect('jira_disabled'),
+                statusCode: FOUND,
+            };
         }
         const parsed = jiraLoginQuerySchema.safeParse(query);
         if (!parsed.success) {
             throw this.invalidQuery(parsed.error.issues);
         }
-        return { url: this.login.beginLogin(parsed.data.mesa), statusCode: FOUND };
+        const { url, setCookie } = this.login.beginLogin(parsed.data.mesa);
+        response.setHeader('Set-Cookie', setCookie);
+        return { url, statusCode: FOUND };
     }
 
     @Get(JIRA_AUTH_PATHS.callback)
+    @Header('Cache-Control', NO_STORE)
     @Redirect()
-    async callback(@Query() query: unknown) {
-        const url = this.login.enabled
-            ? await this.login.completeLogin(query)
-            : this.login.errorRedirect('jira_disabled');
+    async callback(
+        @Query() query: unknown,
+        @Headers('cookie') cookie: string | undefined,
+        @Res({ passthrough: true }) response: HeaderWriter,
+    ) {
+        if (!this.login.enabled) {
+            return {
+                url: this.login.errorRedirect('jira_disabled'),
+                statusCode: FOUND,
+            };
+        }
+        const { url, setCookie } = await this.login.completeLogin(query, cookie);
+        response.setHeader('Set-Cookie', setCookie);
         return { url, statusCode: FOUND };
     }
 
@@ -74,21 +88,15 @@ export class JiraAuthController {
 
     @Post(JIRA_AUTH_PATHS.logout)
     @HttpCode(204)
+    @Header('Cache-Control', NO_STORE)
     closeSession(@Headers(JIRA_AUTHORIZATION_HEADER) authorization?: string): void {
         if (!this.login.enabled) {
             throw jiraError('jira_disabled');
         }
-        const blob = this.bearerBlob(authorization);
+        const blob = parseBearerBlob(authorization);
         if (blob) {
             this.sessions.logout(blob);
         }
-    }
-
-    private bearerBlob(authorization?: string): string | undefined {
-        if (!jiraAuthorizationHeaderSchema.safeParse(authorization).success) {
-            return undefined;
-        }
-        return authorization!.slice(JIRA_AUTHORIZATION_SCHEME.length + 1);
     }
 
     private invalidQuery(issues: { path: PropertyKey[]; message: string }[]): JiraAppException {

@@ -5,43 +5,50 @@ import {
     JIRA_LOGIN_CODE_TTL_MS,
     JIRA_LOGIN_ERROR_QUERY_PARAM,
     JIRA_OAUTH_SCOPES,
-    JIRA_OAUTH_STATE_TTL_MS,
     JiraLoginError,
     ROOM_LINK_QUERY_PARAM,
 } from '../../contracts';
 import { AtlassianAuthClient } from './atlassian-auth.client';
-import { jiraError, rateLimitedError } from './jira-app.exception';
+import { clearBindCookie, readBindCookie, serializeBindCookie } from './bind-cookie';
+import { jiraError } from './jira-app.exception';
 import type { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
 import type { Clock } from './jira-auth.tokens';
 import { JIRA_AUTH_CONFIG, JIRA_CLOCK } from './jira-auth.tokens';
 import { JiraSessionService } from './jira-session.service';
+import { ConsumedNonces, LoginStateSigner } from './login-state';
 import { OneTimeStore } from './one-time-store';
 
-export const MAX_PENDING_LOGINS = 1000;
 export const MAX_PENDING_LOGIN_CODES = 1000;
-export const LOGIN_REFUSED_RETRY_AFTER_MS = 10_000;
+
 const AUTHORIZE_URL = 'https://auth.atlassian.com/authorize';
 
 const callbackQuerySchema = z.object({
     code: z.string().min(1).max(2048).optional(),
-    state: z.string().min(1).max(256).optional(),
+    state: z.string().min(1).max(512).optional(),
     error: z.string().max(256).optional(),
 });
-
-interface PendingLogin {
-    mesa?: string;
-}
 
 interface IssuedSession {
     blob: string;
     siteUrl: string;
 }
 
+export interface LoginStart {
+    url: string;
+    setCookie: string;
+}
+
+export interface LoginCompletion {
+    url: string;
+    setCookie: string;
+}
+
 @Injectable()
 export class JiraLoginService {
     private readonly logger = new Logger(JiraLoginService.name);
-    private readonly states: OneTimeStore<PendingLogin>;
     private readonly codes: OneTimeStore<IssuedSession>;
+    private readonly consumedStates: ConsumedNonces;
+    private readonly signer?: LoginStateSigner;
 
     constructor(
         @Inject(JIRA_AUTH_CONFIG) private readonly config: JiraAuthConfig,
@@ -49,20 +56,22 @@ export class JiraLoginService {
         private readonly sessions: JiraSessionService,
         @Inject(JIRA_CLOCK) clock: Clock,
     ) {
-        this.states = new OneTimeStore({ ttlMs: JIRA_OAUTH_STATE_TTL_MS, maxEntries: MAX_PENDING_LOGINS, clock });
-        this.codes = new OneTimeStore({ ttlMs: JIRA_LOGIN_CODE_TTL_MS, maxEntries: MAX_PENDING_LOGIN_CODES, clock });
+        this.codes = new OneTimeStore({
+            ttlMs: JIRA_LOGIN_CODE_TTL_MS,
+            maxEntries: MAX_PENDING_LOGIN_CODES,
+            clock,
+        });
+        this.consumedStates = new ConsumedNonces(clock);
+        this.signer = config.enabled ? new LoginStateSigner(config.encryptionKey, clock) : undefined;
     }
 
     get enabled(): boolean {
         return this.config.enabled;
     }
 
-    beginLogin(mesa?: string): string {
+    beginLogin(mesa?: string): LoginStart {
         const config = this.requireEnabled();
-        const state = this.states.put({ mesa });
-        if (!state) {
-            throw rateLimitedError('rate_limited', LOGIN_REFUSED_RETRY_AFTER_MS);
-        }
+        const { state, bind } = this.signer!.issue(mesa);
         const url = new URL(AUTHORIZE_URL);
         url.search = new URLSearchParams({
             audience: 'api.atlassian.com',
@@ -73,24 +82,16 @@ export class JiraLoginService {
             response_type: 'code',
             prompt: 'consent',
         }).toString();
-        return url.toString();
+        return {
+            url: url.toString(),
+            setCookie: serializeBindCookie(bind, this.secureCookie(config)),
+        };
     }
 
-    async completeLogin(query: unknown): Promise<string> {
-        const parsed = callbackQuerySchema.safeParse(query);
-        const pending = parsed.success && parsed.data.state ? this.states.take(parsed.data.state) : undefined;
-        if (!parsed.success || !pending) {
-            return this.failed('state_invalid');
-        }
-        if (parsed.data.error || !parsed.data.code) {
-            return this.failed('consent_denied');
-        }
-        try {
-            const code = await this.issueLoginCode(parsed.data.code);
-            return code ? this.successRedirect(code, pending.mesa) : this.failed('code_store_full');
-        } catch (error) {
-            return this.failed('exchange_failed', error);
-        }
+    async completeLogin(query: unknown, cookieHeader?: string): Promise<LoginCompletion> {
+        const config = this.requireEnabled();
+        const setCookie = clearBindCookie(this.secureCookie(config));
+        return { url: await this.resolveCallback(query, cookieHeader), setCookie };
     }
 
     redeemCode(code: string): IssuedSession {
@@ -107,8 +108,31 @@ export class JiraLoginService {
     }
 
     sweep(): void {
-        this.states.sweep();
         this.codes.sweep();
+        this.consumedStates.sweep();
+    }
+
+    private async resolveCallback(query: unknown, cookieHeader?: string): Promise<string> {
+        const parsed = callbackQuerySchema.safeParse(query);
+        const verified =
+            parsed.success && parsed.data.state
+                ? this.signer!.verify(parsed.data.state, readBindCookie(cookieHeader))
+                : undefined;
+        if (!parsed.success || !verified) {
+            return this.failed('state_invalid');
+        }
+        if (!this.consumedStates.consume(verified.nonce, verified.expiresAt)) {
+            return this.failed('state_reused_or_store_full');
+        }
+        if (parsed.data.error || !parsed.data.code) {
+            return this.failed('consent_denied');
+        }
+        try {
+            const code = await this.issueLoginCode(parsed.data.code);
+            return code ? this.successRedirect(code, verified.mesa) : this.failed('code_store_full');
+        } catch (error) {
+            return this.failed('exchange_failed', error);
+        }
     }
 
     private async issueLoginCode(authorizationCode: string): Promise<string | undefined> {
@@ -118,6 +142,7 @@ export class JiraLoginService {
             refreshToken: tokens.refreshToken,
             cloudId: profile.cloudId,
             accountId: profile.accountId,
+            siteUrl: profile.siteUrl,
         });
         this.sessions.prime(blob, tokens.accessToken, tokens.expiresInMs);
         return this.codes.put({ blob, siteUrl: profile.siteUrl });
@@ -140,6 +165,10 @@ export class JiraLoginService {
         const url = new URL('/', this.config.frontUrl);
         url.search = new URLSearchParams(params).toString();
         return url.toString();
+    }
+
+    private secureCookie(config: JiraEnabledConfig): boolean {
+        return new URL(config.redirectUri).protocol === 'https:';
     }
 
     private requireEnabled(): JiraEnabledConfig {

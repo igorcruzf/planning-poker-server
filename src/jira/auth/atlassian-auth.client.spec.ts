@@ -9,9 +9,17 @@ const config = {
 } as JiraEnabledConfig;
 
 const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
-    new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' }, ...init });
+    new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        ...init,
+    });
 
-const tokens = { access_token: 'access-1', refresh_token: 'refresh-1', expires_in: 3600 };
+const tokens = {
+    access_token: 'access-1',
+    refresh_token: 'refresh-1',
+    expires_in: 3600,
+};
 
 const site = (id: string, url: string, scopes: string[] = ['read:jira-work', 'write:jira-work']) => ({
     id,
@@ -148,7 +156,9 @@ describe('AtlassianAuthClient', () => {
 
     it('refuses to call Atlassian when Jira is disabled', async () => {
         const disabled = new AtlassianAuthClient({ enabled: false, frontUrl: 'https://front.test' }, fetchMock);
-        await expect(disabled.refresh('r')).rejects.toMatchObject({ code: 'jira_disabled' });
+        await expect(disabled.refresh('r')).rejects.toMatchObject({
+            code: 'jira_disabled',
+        });
         expect(fetchMock).not.toHaveBeenCalled();
     });
 

@@ -207,6 +207,55 @@ describe('fun events over a real Socket.IO connection', () => {
         });
     });
 
+    describe('fun:umbrella', () => {
+        const umbrellaOf = (state: RoomState, participantId: string) =>
+            state.participants.find((participant) => participant.id === participantId)?.umbrella;
+
+        it('raises and lowers the umbrella in room:state for everyone', async () => {
+            expect(await ack(bia, 'fun:umbrella', { enabled: true })).toEqual({ ok: true, data: null });
+            const raised = (await ana.waitFor('room:state')) as RoomState;
+            expect(await ack(bia, 'fun:umbrella', { enabled: false })).toEqual({ ok: true, data: null });
+            const lowered = (await ana.waitFor('room:state')) as RoomState;
+
+            expect(umbrellaOf(raised, biaSession.participantId)).toBe(true);
+            expect(umbrellaOf(lowered, biaSession.participantId)).toBe(false);
+        });
+
+        it('does not broadcast again when the umbrella is already in that state', async () => {
+            await ack(bia, 'fun:umbrella', { enabled: false });
+            await wait(QUIET_PERIOD_MS);
+
+            expect(ana.queued('room:state')).toEqual([]);
+        });
+
+        it('marks a later throw as blockedByUmbrella', async () => {
+            await ack(bia, 'fun:umbrella', { enabled: true });
+
+            await throwAt(ana, biaSession.participantId);
+
+            expect(await bia.waitFor('fun:thrown')).toMatchObject({
+                targetId: biaSession.participantId,
+                blockedByUmbrella: true,
+            });
+        });
+
+        it('refuses a payload that is not a boolean', async () => {
+            expect(await ack(bia, 'fun:umbrella', { enabled: 'yes' })).toMatchObject({
+                ok: false,
+                error: { code: 'invalid_payload' },
+            });
+        });
+
+        it('refuses a socket without a seat with forbidden not_in_room', async () => {
+            const visitor = await connect();
+
+            expect(await ack(visitor, 'fun:umbrella', { enabled: true })).toMatchObject({
+                ok: false,
+                error: { code: 'forbidden', reason: 'not_in_room' },
+            });
+        });
+    });
+
     describe('fun:react', () => {
         it('emits fun:reacted to the whole table without touching room:state', async () => {
             const response = await ack(bia, 'fun:react', { reaction: '🤔' });

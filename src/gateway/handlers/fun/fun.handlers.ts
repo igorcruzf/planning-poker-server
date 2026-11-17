@@ -45,6 +45,13 @@ export class FunHandlers implements GatewayContributor {
                 return null;
             }),
         );
+        registry.on('fun:umbrella', (payload, { socket }) =>
+            this.runner.run('fun:umbrella', payload, socket, ({ enabled }) => {
+                const { roomCode, participantId } = this.sessions.require(socket.id);
+                this.rooms.setUmbrella(roomCode, participantId, enabled);
+                return null;
+            }),
+        );
         registry.on('fun:react', (payload, { socket, server }) =>
             this.runner.run('fun:react', payload, socket, ({ reaction }) => {
                 const session = this.sessions.require(socket.id);

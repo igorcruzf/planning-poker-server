@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import {
+    MCP_ADDRESS_INITIALIZE_LIMIT,
     MCP_CALL_LIMIT,
     MCP_MAX_BODY_BYTES,
     MCP_MAX_SESSIONS,
@@ -62,16 +63,22 @@ describe('MCP endpoint limits', () => {
         expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
     });
     it('limits the simultaneous sessions of one address', async () => {
-        expect(MCP_MAX_SESSIONS_PER_ADDRESS).toBe(3);
+        expect(MCP_MAX_SESSIONS_PER_ADDRESS).toBe(10);
+        for (let opened = 0; opened < MCP_MAX_SESSIONS_PER_ADDRESS; opened += 1) await seatedKiro();
+        world.clock.advance(MCP_ADDRESS_INITIALIZE_LIMIT.windowMs);
+        expect((await post(INITIALIZE)).status).toBe(429);
+        expect((await post(INITIALIZE, fromAddress(1))).status).toBe(200);
+    });
+    it('limits the sessions without a seat of one address', async () => {
         expect(MCP_MAX_UNSEATED_PER_ADDRESS).toBe(5);
-        for (let opened = 0; opened < MCP_MAX_SESSIONS_PER_ADDRESS; opened += 1) {
+        for (let opened = 0; opened < MCP_MAX_UNSEATED_PER_ADDRESS; opened += 1) {
             expect((await post(INITIALIZE)).status).toBe(200);
         }
         expect((await post(INITIALIZE)).status).toBe(429);
         expect((await post(INITIALIZE, fromAddress(1))).status).toBe(200);
     });
     it('frees the address quota when its sessions end', async () => {
-        for (let opened = 0; opened < MCP_MAX_SESSIONS_PER_ADDRESS; opened += 1) await post(INITIALIZE);
+        for (let opened = 0; opened < MCP_MAX_UNSEATED_PER_ADDRESS; opened += 1) await post(INITIALIZE);
         world.scheduler.advance(MCP_UNSEATED_SESSION_MS);
         expect((await post(INITIALIZE)).status).toBe(200);
     });

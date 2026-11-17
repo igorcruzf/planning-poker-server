@@ -2,16 +2,20 @@ import { randomBytes } from 'node:crypto';
 import { AtlassianAuthClient, AtlassianAuthFailure } from './atlassian-auth.client';
 import { JiraAppException } from './jira-app.exception';
 import { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
-import { JiraSessionService, TOKEN_EXPIRY_MARGIN_MS } from './jira-session.service';
+import { JiraSessionService, parseBearerBlob, TOKEN_EXPIRY_MARGIN_MS } from './jira-session.service';
 import { SessionBlobCodec, SessionPayload } from './session-blob';
 
 const key = randomBytes(32);
-const enabledConfig = { enabled: true, encryptionKey: key } as JiraEnabledConfig;
+const enabledConfig = {
+    enabled: true,
+    encryptionKey: key,
+} as JiraEnabledConfig;
 const payload: SessionPayload = {
     v: 1,
     refreshToken: 'refresh-0',
     cloudId: 'cloud',
     accountId: 'account',
+    siteUrl: 'https://acme.atlassian.net',
     issuedAt: 0,
 };
 const HOUR = 3_600_000;
@@ -25,6 +29,19 @@ const errorOf = async (promise: Promise<unknown>) => {
     }
     throw new Error('expected rejection');
 };
+
+describe('parseBearerBlob', () => {
+    it('extracts the blob from a Bearer header', () => {
+        expect(parseBearerBlob('Bearer abc_DEF-123')).toBe('abc_DEF-123');
+    });
+
+    it.each([undefined, '', 'Basic abc', 'Bearer', 'Bearer a b', 'Bearer inválido!'])(
+        'returns undefined for %p',
+        (header) => {
+            expect(parseBearerBlob(header)).toBeUndefined();
+        },
+    );
+});
 
 describe('JiraSessionService', () => {
     let now: number;
@@ -57,6 +74,7 @@ describe('JiraSessionService', () => {
             accessToken: 'access-0',
             cloudId: 'cloud',
             accountId: 'account',
+            siteUrl: 'https://acme.atlassian.net',
         });
         expect(client.refresh).not.toHaveBeenCalled();
     });
@@ -69,7 +87,9 @@ describe('JiraSessionService', () => {
         await service.getAccessToken(blob);
         expect(client.refresh).not.toHaveBeenCalled();
         now += 1;
-        await expect(service.getAccessToken(blob)).resolves.toMatchObject({ accessToken: 'access-1' });
+        await expect(service.getAccessToken(blob)).resolves.toMatchObject({
+            accessToken: 'access-1',
+        });
         expect(client.refresh).toHaveBeenCalledWith('refresh-0');
     });
 
@@ -82,12 +102,14 @@ describe('JiraSessionService', () => {
             refreshToken: 'refresh-1',
             cloudId: 'cloud',
             accountId: 'account',
+            siteUrl: 'https://acme.atlassian.net',
             issuedAt: now,
         });
         await expect(service.getAccessToken(renewed.refreshedBlob!)).resolves.toEqual({
             accessToken: 'access-1',
             cloudId: 'cloud',
             accountId: 'account',
+            siteUrl: 'https://acme.atlassian.net',
         });
         await expect(service.getAccessToken(blob)).resolves.toMatchObject({
             accessToken: 'access-1',
@@ -111,9 +133,17 @@ describe('JiraSessionService', () => {
     });
 
     it('does not mint a new blob when Atlassian keeps the refresh token', async () => {
-        client.refresh.mockResolvedValue({ ...tokens(1), refreshToken: 'refresh-0' });
+        client.refresh.mockResolvedValue({
+            ...tokens(1),
+            refreshToken: 'refresh-0',
+        });
         const result = await createService().getAccessToken(blob);
-        expect(result).toEqual({ accessToken: 'access-1', cloudId: 'cloud', accountId: 'account' });
+        expect(result).toEqual({
+            accessToken: 'access-1',
+            cloudId: 'cloud',
+            accountId: 'account',
+            siteUrl: 'https://acme.atlassian.net',
+        });
     });
 
     it('runs a single renewal for simultaneous calls with the same blob', async () => {
@@ -140,7 +170,9 @@ describe('JiraSessionService', () => {
         }
         expect(client.refresh).toHaveBeenCalledTimes(1);
         client.refresh.mockResolvedValueOnce(tokens(1));
-        await expect(service.getAccessToken(blob)).resolves.toMatchObject({ accessToken: 'access-1' });
+        await expect(service.getAccessToken(blob)).resolves.toMatchObject({
+            accessToken: 'access-1',
+        });
         expect(client.refresh).toHaveBeenCalledTimes(2);
     });
 
@@ -149,7 +181,9 @@ describe('JiraSessionService', () => {
             .mockRejectedValueOnce(new AtlassianAuthFailure('rate_limited'))
             .mockRejectedValueOnce(new AtlassianAuthFailure('rate_limited'))
             .mockResolvedValueOnce(tokens(1));
-        await expect(createService().getAccessToken(blob)).resolves.toMatchObject({ accessToken: 'access-1' });
+        await expect(createService().getAccessToken(blob)).resolves.toMatchObject({
+            accessToken: 'access-1',
+        });
         expect(sleep.mock.calls).toEqual([[500], [1000]]);
     });
 
@@ -205,9 +239,55 @@ describe('JiraSessionService', () => {
     });
 
     it('answers jira_disabled when Jira is not configured', async () => {
-        const service = createService({ enabled: false, frontUrl: 'https://front.test' });
+        const service = createService({
+            enabled: false,
+            frontUrl: 'https://front.test',
+        });
         expect((await errorOf(service.getAccessToken(blob))).code).toBe('jira_disabled');
         expect(() => service.logout(blob)).toThrow(JiraAppException);
+    });
+
+    it('does not resurrect a session that logged out during a renewal', async () => {
+        let release!: (value: ReturnType<typeof tokens>) => void;
+        client.refresh.mockReturnValue(new Promise((resolve) => (release = resolve)));
+        const service = createService();
+        const pending = errorOf(service.getAccessToken(blob));
+        service.logout(blob);
+        release(tokens(1));
+        expect((await pending).code).toBe('jira_reconnect_required');
+        expect(service.size).toBe(0);
+    });
+
+    it('keeps the session when the renewal fails for a transient reason', async () => {
+        client.refresh.mockRejectedValueOnce(new AtlassianAuthFailure('unavailable'));
+        const service = createService();
+        await errorOf(service.getAccessToken(blob));
+        expect(service.size).toBe(1);
+        client.refresh.mockResolvedValueOnce(tokens(1));
+        await expect(service.getAccessToken(blob)).resolves.toMatchObject({
+            accessToken: 'access-1',
+        });
+    });
+
+    it('forces a renewal even with a usable cached token', async () => {
+        client.refresh.mockResolvedValue(tokens(1));
+        const service = createService();
+        service.prime(blob, 'access-0', HOUR);
+        await expect(service.forceRefresh(blob)).resolves.toMatchObject({
+            accessToken: 'access-1',
+            siteUrl: 'https://acme.atlassian.net',
+        });
+        expect(client.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares the in-flight renewal with a forced refresh', async () => {
+        let release!: (value: ReturnType<typeof tokens>) => void;
+        client.refresh.mockReturnValue(new Promise((resolve) => (release = resolve)));
+        const service = createService();
+        const calls = [service.getAccessToken(blob), service.forceRefresh(blob)];
+        release(tokens(1));
+        await Promise.all(calls);
+        expect(client.refresh).toHaveBeenCalledTimes(1);
     });
 
     it('sweeps entries that were idle past the retention window', async () => {

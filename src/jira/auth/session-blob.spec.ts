@@ -8,6 +8,7 @@ const payload: SessionPayload = {
     refreshToken: 'refresh-secret-value',
     cloudId: 'cloud-1',
     accountId: 'account-1',
+    siteUrl: 'https://acme.atlassian.net',
     issuedAt: 1_700_000_000_000,
 };
 
@@ -67,6 +68,12 @@ describe('SessionBlobCodec', () => {
         reconnectRequired(() => codec.decode(codec.encode({ ...payload, cloudId: 7 } as unknown as SessionPayload)));
     });
 
+    it('rejects a payload without the site url or with a non http one', () => {
+        const withoutSite: Partial<SessionPayload> = { ...payload };
+        delete withoutSite.siteUrl;
+        reconnectRequired(() => codec.decode(codec.encode(withoutSite as unknown as SessionPayload)));
+        reconnectRequired(() => codec.decode(codec.encode({ ...payload, siteUrl: 'javascript:x' })));
+    });
     it.each([
         ['invalid base64url', '***not-base64***'],
         ['empty text', ''],

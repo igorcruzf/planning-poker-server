@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { JIRA_AUTHORIZATION_SCHEME, jiraAuthorizationHeaderSchema } from '../../contracts';
 import { AtlassianAuthClient, AtlassianAuthFailure, AtlassianTokens } from './atlassian-auth.client';
 import { JiraAppException, jiraError, rateLimitedError } from './jira-app.exception';
 import type { JiraAuthConfig } from './jira-auth.config';
@@ -16,18 +17,26 @@ export interface JiraAccessGrant {
     accessToken: string;
     cloudId: string;
     accountId: string;
+    siteUrl: string;
     refreshedBlob?: string;
 }
+
+export const parseBearerBlob = (authorization?: string): string | undefined =>
+    jiraAuthorizationHeaderSchema.safeParse(authorization).success
+        ? authorization!.slice(JIRA_AUTHORIZATION_SCHEME.length + 1)
+        : undefined;
 
 interface CachedSession {
     keys: Set<string>;
     currentBlob: string;
     cloudId: string;
     accountId: string;
+    siteUrl: string;
     accessToken?: string;
     expiresAt: number;
     retainUntil: number;
     renewal?: Promise<void>;
+    revoked: boolean;
 }
 
 @Injectable()
@@ -49,7 +58,11 @@ export class JiraSessionService {
     }
 
     createBlob(payload: Omit<SessionPayload, 'v' | 'issuedAt'>): string {
-        return this.requireCodec().encode({ v: 1, ...payload, issuedAt: this.clock() });
+        return this.requireCodec().encode({
+            v: 1,
+            ...payload,
+            issuedAt: this.clock(),
+        });
     }
 
     prime(blob: string, accessToken: string, expiresInMs: number): void {
@@ -58,7 +71,18 @@ export class JiraSessionService {
     }
 
     async getAccessToken(blob: string): Promise<JiraAccessGrant> {
+        return this.grant(blob, false);
+    }
+
+    async forceRefresh(blob: string): Promise<JiraAccessGrant> {
+        return this.grant(blob, true);
+    }
+
+    private async grant(blob: string, forceRenewal: boolean): Promise<JiraAccessGrant> {
         const session = this.sessionFor(blob);
+        if (forceRenewal && !session.renewal) {
+            session.accessToken = undefined;
+        }
         if (!this.hasUsableToken(session)) {
             session.renewal ??= this.renew(session).finally(() => {
                 session.renewal = undefined;
@@ -106,6 +130,8 @@ export class JiraSessionService {
             currentBlob: blob,
             cloudId: payload.cloudId,
             accountId: payload.accountId,
+            siteUrl: payload.siteUrl,
+            revoked: false,
             expiresAt: 0,
             retainUntil: this.clock() + REFRESH_ROTATION_GRACE_MS,
         };
@@ -132,6 +158,7 @@ export class JiraSessionService {
             accessToken: session.accessToken!,
             cloudId: session.cloudId,
             accountId: session.accountId,
+            siteUrl: session.siteUrl,
         };
         return session.currentBlob === presentedBlob ? grant : { ...grant, refreshedBlob: session.currentBlob };
     }
@@ -140,12 +167,21 @@ export class JiraSessionService {
         try {
             const payload = this.requireCodec().decode(session.currentBlob);
             const tokens = await this.refreshWithBackoff(payload.refreshToken);
+            if (session.revoked) {
+                throw jiraError('jira_reconnect_required');
+            }
             this.storeAccessToken(session, tokens.accessToken, tokens.expiresInMs);
             if (tokens.refreshToken !== payload.refreshToken) {
-                this.rotate(session, { ...payload, refreshToken: tokens.refreshToken, issuedAt: this.clock() });
+                this.rotate(session, {
+                    ...payload,
+                    refreshToken: tokens.refreshToken,
+                    issuedAt: this.clock(),
+                });
             }
         } catch (error) {
-            this.evict(session);
+            if (error instanceof AtlassianAuthFailure && error.kind === 'invalid_grant') {
+                this.evict(session);
+            }
             throw this.toException(error);
         }
     }
@@ -159,6 +195,7 @@ export class JiraSessionService {
     }
 
     private evict(session: CachedSession): void {
+        session.revoked = true;
         for (const key of session.keys) {
             this.sessions.delete(key);
         }

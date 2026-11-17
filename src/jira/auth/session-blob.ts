@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { JIRA_SESSION_BLOB_MAX_LENGTH, jiraSessionBlobSchema } from '../../contracts';
+import { JIRA_SESSION_BLOB_MAX_LENGTH, httpUrlSchema, jiraSessionBlobSchema } from '../../contracts';
 import { jiraError } from './jira-app.exception';
 
 export const SESSION_BLOB_VERSION = 1;
@@ -14,6 +14,7 @@ const sessionPayloadSchema = z.strictObject({
     refreshToken: z.string().min(1),
     cloudId: z.string().min(1),
     accountId: z.string().min(1),
+    siteUrl: httpUrlSchema,
     issuedAt: z.number().int().nonnegative(),
 });
 export type SessionPayload = z.infer<typeof sessionPayloadSchema>;
@@ -31,7 +32,9 @@ export class SessionBlobCodec {
 
     encode(payload: SessionPayload): string {
         const iv = randomBytes(IV_BYTES);
-        const cipher = createCipheriv(ALGORITHM, this.key, iv, { authTagLength: TAG_BYTES });
+        const cipher = createCipheriv(ALGORITHM, this.key, iv, {
+            authTagLength: TAG_BYTES,
+        });
         const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
         const blob = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url');
         if (blob.length > JIRA_SESSION_BLOB_MAX_LENGTH) {
@@ -58,7 +61,9 @@ export class SessionBlobCodec {
         }
         const iv = bytes.subarray(0, IV_BYTES);
         const tag = bytes.subarray(IV_BYTES, IV_BYTES + TAG_BYTES);
-        const decipher = createDecipheriv(ALGORITHM, this.key, iv, { authTagLength: TAG_BYTES });
+        const decipher = createDecipheriv(ALGORITHM, this.key, iv, {
+            authTagLength: TAG_BYTES,
+        });
         decipher.setAuthTag(tag);
         const plain = Buffer.concat([decipher.update(bytes.subarray(IV_BYTES + TAG_BYTES)), decipher.final()]);
         return sessionPayloadSchema.parse(JSON.parse(plain.toString('utf8')));

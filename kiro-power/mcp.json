@@ -1,0 +1,7 @@
+{
+    "mcpServers": {
+        "yakpoker": {
+            "url": "https://planning-poker-server-slaf.onrender.com/mcp"
+        }
+    }
+}

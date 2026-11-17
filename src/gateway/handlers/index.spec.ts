@@ -1,7 +1,7 @@
 import { gatewayAreas } from './index';
 
 const AREAS = ['room', 'round', 'roulette', 'fun', 'jira', 'kiro'];
-const EMPTY_AREAS = ['roulette', 'fun', 'jira', 'kiro'];
+const EMPTY_AREAS = ['roulette', 'fun', 'jira'];
 
 describe('gatewayAreas', () => {
     it('aggregates exactly the six areas', () => {

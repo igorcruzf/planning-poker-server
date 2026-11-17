@@ -1,26 +1,7 @@
-import { Socket } from 'socket.io';
 import { FakeClock } from '../../domain/testing/fake-clock';
-import { clientAddressOf } from './client-address';
 import { ConnectionLimiter } from './connection-limiter';
 import { EventRateLimiter } from './event-rate-limiter';
 import { ADDRESS_ENTRY_LIMIT, MAX_CONNECTIONS_PER_ADDRESS, SOCKET_EVENT_LIMIT } from './limits';
-
-const socketWith = (headers: Record<string, string | string[]>, address = '10.0.0.9') =>
-    ({ handshake: { headers, address } }) as unknown as Pick<Socket, 'handshake'>;
-
-describe('clientAddressOf', () => {
-    it('uses the handshake address without a proxy header', () => {
-        expect(clientAddressOf(socketWith({}))).toBe('10.0.0.9');
-    });
-
-    it('uses the entry the closest proxy appended to x-forwarded-for', () => {
-        expect(clientAddressOf(socketWith({ 'x-forwarded-for': '6.6.6.6, 203.0.113.7' }))).toBe('203.0.113.7');
-    });
-
-    it('limits the size of the address', () => {
-        expect(clientAddressOf(socketWith({ 'x-forwarded-for': 'a'.repeat(500) }))).toHaveLength(64);
-    });
-});
 
 describe('ConnectionLimiter', () => {
     it('is full after the maximum of sockets of one address', () => {

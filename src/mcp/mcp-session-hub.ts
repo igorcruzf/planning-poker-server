@@ -6,13 +6,13 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { Clock } from '../domain/clock';
 import { CancelTimer, Scheduler } from '../gateway/session/scheduler';
+import { clientAddressOfRequest } from '../gateway/session/client-address';
 import { RateLimiter } from '../gateway/session/rate-limiter';
 import { createKiroMcpServer } from './kiro-mcp-server';
 import { KiroSession } from './kiro-session';
 import { KiroTableService } from './kiro-table.service';
 import {
     MCP_ADDRESS_INITIALIZE_LIMIT,
-    MCP_ADDRESS_MAX_LENGTH,
     MCP_CALL_LIMIT,
     MCP_JOIN_ATTEMPT_LIMIT,
     MCP_MAX_BODY_BYTES,
@@ -30,7 +30,6 @@ interface OpenSession {
     released: boolean;
 }
 const SESSION_HEADER = 'mcp-session-id';
-const FORWARDED_FOR_HEADER = 'x-forwarded-for';
 const JSON_RPC_SERVER_ERROR = -32000;
 const MILLISECONDS_PER_SECOND = 1000;
 const NO_OP = () => undefined;
@@ -59,7 +58,7 @@ export class McpSessionHub implements OnModuleDestroy {
         const sessionId = headerOf(req, SESSION_HEADER);
         if (sessionId !== undefined) return this.forward(sessionId, req, res, body);
         if (req.method !== 'POST' || !isInitializeRequest(body)) return reply(res, 400, 'Sessão MCP ausente');
-        const retryAfterMs = this.initializeLimiter.consume(addressOf(req));
+        const retryAfterMs = this.initializeLimiter.consume(clientAddressOfRequest(req));
         if (retryAfterMs !== null) return reply(res, 429, 'Muitas tentativas', retryAfterMs);
         if (this.sessions.size + this.opening >= MCP_MAX_SESSIONS) return reply(res, 503, 'Sem vagas no momento');
         await this.open(req, res, body);
@@ -137,10 +136,6 @@ export class McpSessionHub implements OnModuleDestroy {
 const headerOf = (req: McpRequest, name: string): string | undefined => {
     const value = req.headers[name];
     return Array.isArray(value) ? value[0] : value;
-};
-const addressOf = (req: McpRequest): string => {
-    const forwarded = headerOf(req, FORWARDED_FOR_HEADER)?.split(',').pop()?.trim();
-    return (forwarded || req.socket.remoteAddress || 'unknown').slice(0, MCP_ADDRESS_MAX_LENGTH);
 };
 const isTooLarge = (req: McpRequest, body: unknown): boolean => {
     const declared = Number(headerOf(req, 'content-length'));

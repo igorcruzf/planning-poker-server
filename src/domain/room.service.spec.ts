@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { RoomCreatePayload, roomCreatePayloadSchema, roomSessionSchema, roomStateSchema } from '../contracts';
 import { DomainError } from './domain-error';
 import { DomainModule } from './domain.module';
+import { DISCONNECTED_PARTICIPANT_TTL_MS } from './room';
 import { RoomRepository } from './room.repository';
 import { RoomChange, RoomService } from './room.service';
 
@@ -268,5 +269,13 @@ describe('RoomService umbrella and authentication', () => {
         expect(errorOf(() => service.authenticate('yak-zzzzzzzz', owner.sessionToken))).toMatchObject({
             code: 'room_not_found',
         });
+    });
+    it('notifies a left change when the sweep prunes absent participants', () => {
+        const owner = service.createRoom(createPayload());
+        const bia = service.join({ roomCode: owner.roomCode, name: 'Bia', role: 'player' });
+        service.disconnect(owner.roomCode, bia.participantId);
+        service.onChange((change) => changes.push(change));
+        context.get(RoomRepository).sweep(Date.now() + DISCONNECTED_PARTICIPANT_TTL_MS + 1000);
+        expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'left' }]);
     });
 });

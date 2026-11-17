@@ -1,4 +1,5 @@
 import { ROOM_IDLE_TTL_MS } from '../contracts';
+import { DISCONNECTED_PARTICIPANT_TTL_MS } from './room';
 import { DomainError } from './domain-error';
 import { RoomCodeGenerator } from './room-code';
 import { RoomRepository, SWEEP_INTERVAL_MS } from './room.repository';
@@ -125,6 +126,23 @@ describe('RoomRepository', () => {
     });
 });
 
+describe('RoomRepository pruning absent participants', () => {
+    it('removes humans absent for too long on sweep and announces the room', () => {
+        const { clock, repository } = createRepository(['yak-aaaaaaaa']);
+        const room = repository.create(roomPayload());
+        const owner = room.join({ name: 'Ana', role: 'player' });
+        const bia = room.join({ name: 'Bia', role: 'player' });
+        const pruned: string[] = [];
+        repository.onPruned((code) => pruned.push(code));
+        room.markDisconnected(bia.participantId);
+        clock.advance(DISCONNECTED_PARTICIPANT_TTL_MS + 1);
+        repository.sweep(clock.now());
+        expect(room.participants.map((participant) => participant.id)).toEqual([owner.participantId]);
+        expect(pruned).toEqual(['yak-aaaaaaaa']);
+        repository.sweep(clock.now());
+        expect(pruned).toHaveLength(1);
+    });
+});
 describe('RoomRepository sweeping lifecycle', () => {
     beforeEach(() => jest.useFakeTimers());
     afterEach(() => jest.useRealTimers());

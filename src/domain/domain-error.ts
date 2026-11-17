@@ -7,6 +7,7 @@ export class DomainError extends Error {
     }
 }
 
+const ROOM_FULL_ISSUE = { path: 'room', message: 'room_full' };
 const NAME_TAKEN_ISSUE = { path: 'name', message: 'name_taken' };
 
 export const domainErrors = {
@@ -25,5 +26,6 @@ export const domainErrors = {
     kiroDisabled: () => new DomainError({ code: 'kiro_disabled' }),
     inviteInvalid: () => new DomainError({ code: 'invite_invalid' }),
     internal: () => new DomainError({ code: 'internal_error' }),
+    roomFull: () => new DomainError({ code: 'invalid_payload', issues: [ROOM_FULL_ISSUE] }),
     nameTaken: () => new DomainError({ code: 'invalid_payload', issues: [NAME_TAKEN_ISSUE] }),
 };

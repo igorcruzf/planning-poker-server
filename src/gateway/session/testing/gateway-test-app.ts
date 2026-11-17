@@ -22,8 +22,11 @@ export class GatewayTestApp {
         return new GatewayTestApp(app);
     }
 
-    async connect(auth: Record<string, unknown> = { protocolVersion: PROTOCOL_VERSION }): Promise<SocketIoTestClient> {
-        const client = await SocketIoTestClient.connect(socketIoUrl(this.app), { auth });
+    async connect(
+        auth: Record<string, unknown> = { protocolVersion: PROTOCOL_VERSION },
+        timeoutMs?: number,
+    ): Promise<SocketIoTestClient> {
+        const client = await SocketIoTestClient.connect(socketIoUrl(this.app), { auth, timeoutMs });
         this.clients.push(client);
         return client;
     }

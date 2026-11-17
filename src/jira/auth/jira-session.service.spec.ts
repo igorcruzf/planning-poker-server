@@ -2,7 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { AtlassianAuthClient, AtlassianAuthFailure } from './atlassian-auth.client';
 import { JiraAppException } from './jira-app.exception';
 import { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
-import { JiraSessionService, parseBearerBlob, TOKEN_EXPIRY_MARGIN_MS } from './jira-session.service';
+import {
+    BLOB_FUTURE_TOLERANCE_MS,
+    BLOB_MAX_AGE_MS,
+    JiraSessionService,
+    parseBearerBlob,
+    TOKEN_EXPIRY_MARGIN_MS,
+} from './jira-session.service';
+import { REVOKED_BLOBS_LIMIT } from './revoked-blob-vault';
 import { SessionBlobCodec, SessionPayload } from './session-blob';
 
 const key = randomBytes(32);
@@ -219,23 +226,64 @@ describe('JiraSessionService', () => {
         expect(client.refresh).not.toHaveBeenCalled();
     });
 
-    it('drops the cached token on logout and tolerates invalid blobs', async () => {
-        client.refresh.mockResolvedValue(tokens(1));
+    it('refuses a blob after logout and tolerates invalid blobs', async () => {
         const service = createService();
         service.prime(blob, 'access-0', HOUR);
         service.logout(blob);
         expect(() => service.logout('garbage')).not.toThrow();
-        await service.getAccessToken(blob);
-        expect(client.refresh).toHaveBeenCalledTimes(1);
+        expect((await errorOf(service.getAccessToken(blob))).code).toBe('jira_reconnect_required');
+        expect((await errorOf(service.forceRefresh(blob))).code).toBe('jira_reconnect_required');
+        expect(client.refresh).not.toHaveBeenCalled();
     });
 
-    it('drops the successor blob from the cache on logout', async () => {
+    it('revokes a blob that was not in the cache at logout', async () => {
+        const service = createService();
+        service.logout(blob);
+        expect((await errorOf(service.getAccessToken(blob))).code).toBe('jira_reconnect_required');
+        expect(client.refresh).not.toHaveBeenCalled();
+    });
+
+    it('revokes every generation of the blob on logout', async () => {
         client.refresh.mockResolvedValue(tokens(1));
         const service = createService();
         const { refreshedBlob } = await service.getAccessToken(blob);
         service.logout(blob);
-        client.refresh.mockResolvedValue(tokens(2));
-        await expect(service.getAccessToken(refreshedBlob!)).resolves.toMatchObject({ accessToken: 'access-2' });
+        expect(service.size).toBe(0);
+        expect((await errorOf(service.getAccessToken(refreshedBlob!))).code).toBe('jira_reconnect_required');
+        expect((await errorOf(service.getAccessToken(blob))).code).toBe('jira_reconnect_required');
+    });
+
+    it('discards the oldest revocation when the vault is full', async () => {
+        client.refresh.mockResolvedValue(tokens(1));
+        const service = createService();
+        const blobs = Array.from({ length: REVOKED_BLOBS_LIMIT + 1 }, (_, n) =>
+            codec.encode({ ...payload, issuedAt: now, refreshToken: `r-${n}` }),
+        );
+        blobs.forEach((revoked) => service.logout(revoked));
+        await expect(service.getAccessToken(blobs[0])).resolves.toBeDefined();
+        expect((await errorOf(service.getAccessToken(blobs[REVOKED_BLOBS_LIMIT]))).code).toBe(
+            'jira_reconnect_required',
+        );
+    });
+
+    it('refuses a blob older than the maximum age', async () => {
+        now = BLOB_MAX_AGE_MS + 1_000_000;
+        const service = createService();
+        const stale = codec.encode({ ...payload, issuedAt: now - BLOB_MAX_AGE_MS - 1 });
+        expect((await errorOf(service.getAccessToken(stale))).code).toBe('jira_reconnect_required');
+        expect(client.refresh).not.toHaveBeenCalled();
+        client.refresh.mockResolvedValue(tokens(1));
+        const edge = codec.encode({ ...payload, issuedAt: now - BLOB_MAX_AGE_MS });
+        await expect(service.getAccessToken(edge)).resolves.toBeDefined();
+    });
+
+    it('refuses a blob issued in the future beyond the tolerance', async () => {
+        const service = createService();
+        const future = codec.encode({ ...payload, issuedAt: now + BLOB_FUTURE_TOLERANCE_MS + 1 });
+        expect((await errorOf(service.forceRefresh(future))).code).toBe('jira_reconnect_required');
+        client.refresh.mockResolvedValue(tokens(1));
+        const tolerated = codec.encode({ ...payload, issuedAt: now + BLOB_FUTURE_TOLERANCE_MS });
+        await expect(service.getAccessToken(tolerated)).resolves.toBeDefined();
     });
 
     it('answers jira_disabled when Jira is not configured', async () => {

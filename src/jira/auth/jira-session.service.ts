@@ -5,8 +5,11 @@ import { JiraAppException, jiraError, rateLimitedError } from './jira-app.except
 import type { JiraAuthConfig } from './jira-auth.config';
 import type { Clock, Sleep } from './jira-auth.tokens';
 import { JIRA_AUTH_CONFIG, JIRA_CLOCK, JIRA_SLEEP } from './jira-auth.tokens';
+import { RevokedBlobVault } from './revoked-blob-vault';
 import { SessionBlobCodec, SessionPayload } from './session-blob';
 
+export const BLOB_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const BLOB_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 export const TOKEN_EXPIRY_MARGIN_MS = 60_000;
 export const REFRESH_ROTATION_GRACE_MS = 10 * 60 * 1000;
 export const RATE_LIMIT_MAX_ATTEMPTS = 3;
@@ -42,6 +45,8 @@ interface CachedSession {
 @Injectable()
 export class JiraSessionService {
     private readonly sessions = new Map<string, CachedSession>();
+    /** Revocations live in memory and are lost on restart; the blob maximum age bounds that window. */
+    private readonly revokedBlobs = new RevokedBlobVault(BLOB_MAX_AGE_MS);
     private readonly codec?: SessionBlobCodec;
 
     constructor(
@@ -95,8 +100,13 @@ export class JiraSessionService {
 
     logout(blob: string): void {
         this.requireCodec();
-        const session = this.sessions.get(SessionBlobCodec.fingerprint(blob));
+        const key = SessionBlobCodec.fingerprint(blob);
+        this.revokedBlobs.revoke(key, this.clock());
+        const session = this.sessions.get(key);
         if (session) {
+            for (const generation of session.keys) {
+                this.revokedBlobs.revoke(generation, this.clock());
+            }
             this.evict(session);
         }
     }
@@ -120,11 +130,15 @@ export class JiraSessionService {
     private sessionFor(blob: string): CachedSession {
         const codec = this.requireCodec();
         const key = SessionBlobCodec.fingerprint(blob);
+        if (this.revokedBlobs.isRevoked(key, this.clock())) {
+            throw jiraError('jira_reconnect_required');
+        }
         const cached = this.sessions.get(key);
         if (cached) {
             return cached;
         }
         const payload = codec.decode(blob);
+        this.requireAcceptableIssuance(payload.issuedAt);
         const session: CachedSession = {
             keys: new Set([key]),
             currentBlob: blob,
@@ -137,6 +151,13 @@ export class JiraSessionService {
         };
         this.sessions.set(key, session);
         return session;
+    }
+
+    private requireAcceptableIssuance(issuedAt: number): void {
+        const age = this.clock() - issuedAt;
+        if (age > BLOB_MAX_AGE_MS || age < -BLOB_FUTURE_TOLERANCE_MS) {
+            throw jiraError('jira_reconnect_required');
+        }
     }
 
     private hasUsableToken(session: CachedSession): boolean {

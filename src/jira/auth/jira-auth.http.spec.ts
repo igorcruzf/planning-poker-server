@@ -439,15 +439,17 @@ describe('Jira auth endpoints', () => {
     });
 
     describe('logout', () => {
-        it('answers 204 and drops the cached access token', async () => {
+        it('answers 204 and revokes the blob', async () => {
             await start();
             const { blob } = await openSession();
             const response = await post('/api/auth/jira/logout', undefined, {
                 Authorization: `Bearer ${blob}`,
             });
             expect(response.status).toBe(204);
-            await app.get(JiraSessionService).getAccessToken(blob);
-            expect(refreshCount).toBe(1);
+            await expect(app.get(JiraSessionService).getAccessToken(blob)).rejects.toMatchObject({
+                error: { code: 'jira_reconnect_required' },
+            });
+            expect(refreshCount).toBe(0);
         });
 
         it.each([

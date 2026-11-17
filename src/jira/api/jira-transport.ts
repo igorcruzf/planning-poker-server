@@ -25,8 +25,8 @@ export interface JiraRequest {
 
 const parseRetryAfterMs = (header: string | null): number | undefined => {
     const seconds = Number(header);
-    return header !== null && header.trim() !== '' && Number.isFinite(seconds) && seconds >= 0
-        ? Math.round(seconds * 1000)
+    return header !== null && header.trim() !== '' && Number.isFinite(seconds) && seconds > 0
+        ? Math.min(RATE_LIMIT_MAX_DELAY_MS, Math.round(seconds * 1000))
         : undefined;
 };
 

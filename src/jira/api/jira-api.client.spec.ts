@@ -475,6 +475,27 @@ describe('JiraApiClient', () => {
             expect(atlassian.requests).toHaveLength(3);
         });
 
+        it('caps a huge Retry-After at the maximum delay, in the wait and in the final error', async () => {
+            const huge = reply(429, undefined, { 'Retry-After': '86400' });
+            const { run, sleeps } = search([huge, huge, huge]);
+
+            expect(await errorOf(run())).toEqual({ code: 'jira_rate_limited', retryAfterMs: 8000 });
+            expect(sleeps).toEqual([8000, 8000]);
+        });
+
+        it.each([
+            ['negative', '-5'],
+            ['textual', 'abc'],
+            ['an HTTP date', 'Wed, 21 Oct 2026 07:28:00 GMT'],
+            ['zero', '0'],
+        ])('falls back to the exponential backoff when Retry-After is %s', async (_label, header) => {
+            const bad = reply(429, undefined, { 'Retry-After': header });
+            const { run, sleeps } = search([bad, bad, bad]);
+
+            expect(await errorOf(run())).toEqual({ code: 'jira_rate_limited', retryAfterMs: 2000 });
+            expect(sleeps).toEqual([500, 1000]);
+        });
+
         it('never puts the Atlassian body or the token in the error', async () => {
             const { run } = search([reply(403, { message: 'segredo-do-card', token: 'access-1' })]);
 

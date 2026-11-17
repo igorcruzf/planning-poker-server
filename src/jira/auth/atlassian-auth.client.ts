@@ -41,9 +41,12 @@ const tokenResponseSchema = z.object({
     refresh_token: z.string().min(1).optional(),
     expires_in: z.number().positive(),
 });
-const resourcesSchema = z.array(z.object({ id: z.string().min(1), url: httpUrlSchema })).min(1);
+const resourcesSchema = z
+    .array(z.object({ id: z.string().min(1), url: httpUrlSchema, scopes: z.array(z.string()).default([]) }))
+    .min(1);
 const meSchema = z.object({ account_id: z.string().min(1) });
 
+const JIRA_SITE_SCOPE = 'read:jira-work';
 const GRANT_REJECTED_STATUSES = new Set([400, 401, 403]);
 
 const parseRetryAfterMs = (header: string | null): number | undefined => {
@@ -96,7 +99,12 @@ export class AtlassianAuthClient {
         if (!resources.success || !me.success) {
             throw new AtlassianAuthFailure('invalid_response');
         }
-        const [site] = resources.data;
+        const [site] = resources.data
+            .filter((resource) => resource.scopes.includes(JIRA_SITE_SCOPE))
+            .sort((first, second) => (first.url < second.url ? -1 : first.url > second.url ? 1 : 0));
+        if (!site) {
+            throw new AtlassianAuthFailure('invalid_response');
+        }
         return { cloudId: site.id, siteUrl: site.url, accountId: me.data.account_id };
     }
 
@@ -126,6 +134,7 @@ export class AtlassianAuthClient {
         try {
             response = await this.fetchFunction(url, {
                 ...init,
+                redirect: 'error',
                 signal: AbortSignal.timeout(ATLASSIAN_REQUEST_TIMEOUT_MS),
             });
         } catch {

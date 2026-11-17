@@ -13,6 +13,12 @@ const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
 
 const tokens = { access_token: 'access-1', refresh_token: 'refresh-1', expires_in: 3600 };
 
+const site = (id: string, url: string, scopes: string[] = ['read:jira-work', 'write:jira-work']) => ({
+    id,
+    url,
+    name: id,
+    scopes,
+});
 const failureOf = async (promise: Promise<unknown>): Promise<AtlassianAuthFailure> => {
     try {
         await promise;
@@ -65,7 +71,7 @@ describe('AtlassianAuthClient', () => {
 
     it('discovers cloud, site and account', async () => {
         fetchMock
-            .mockResolvedValueOnce(jsonResponse([{ id: 'cloud-1', url: 'https://acme.atlassian.net', name: 'Acme' }]))
+            .mockResolvedValueOnce(jsonResponse([site('cloud-1', 'https://acme.atlassian.net')]))
             .mockResolvedValueOnce(jsonResponse({ account_id: 'account-1' }));
         await expect(client.fetchProfile('access-1')).resolves.toEqual({
             cloudId: 'cloud-1',
@@ -77,6 +83,34 @@ describe('AtlassianAuthClient', () => {
         expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer access-1');
     });
 
+    it('ignores sites without the Jira scope and picks the first eligible one by url', async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                jsonResponse([
+                    site('wiki', 'https://a-wiki.atlassian.net', ['read:confluence-content.all']),
+                    site('cloud-z', 'https://zeta.atlassian.net'),
+                    site('cloud-b', 'https://beta.atlassian.net'),
+                ]),
+            )
+            .mockResolvedValueOnce(jsonResponse({ account_id: 'account-1' }));
+        await expect(client.fetchProfile('access-1')).resolves.toMatchObject({
+            cloudId: 'cloud-b',
+            siteUrl: 'https://beta.atlassian.net',
+        });
+    });
+    it('fails when no site has the Jira scope', async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                jsonResponse([site('wiki', 'https://a.atlassian.net', ['read:confluence-content.all'])]),
+            )
+            .mockResolvedValueOnce(jsonResponse({ account_id: 'a' }));
+        expect((await failureOf(client.fetchProfile('access-1'))).kind).toBe('invalid_response');
+    });
+    it('refuses to follow redirects', async () => {
+        fetchMock.mockResolvedValue(jsonResponse(tokens));
+        await client.exchangeCode('c');
+        expect(fetchMock.mock.calls[0][1].redirect).toBe('error');
+    });
     it('fails when there is no accessible site', async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse([])).mockResolvedValueOnce(jsonResponse({ account_id: 'a' }));
         expect((await failureOf(client.fetchProfile('access-1'))).kind).toBe('invalid_response');

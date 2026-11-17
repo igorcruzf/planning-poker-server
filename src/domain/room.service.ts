@@ -20,6 +20,7 @@ import {
     RoundTarget,
     VoteRequest,
 } from './room';
+import { ParticipantView } from './participant';
 import { RoomRepository } from './room.repository';
 import { snapshotFor } from './snapshot';
 
@@ -38,6 +39,7 @@ export type RoomChangeReason =
     | 'disconnected'
     | 'role_changed'
     | 'settings_updated'
+    | 'umbrella_changed'
     | 'facilitator_transferred'
     | 'issue_changed'
     | 'jira_updated'
@@ -115,6 +117,14 @@ export class RoomService {
 
     updateSettings(roomCode: string, actorId: string, patch: RoomSettingsPatch): void {
         this.mutateIfChanged(roomCode, 'settings_updated', (room) => room.updateSettings(actorId, patch));
+    }
+
+    setUmbrella(roomCode: string, participantId: string, enabled: boolean): void {
+        this.mutateIfChanged(roomCode, 'umbrella_changed', (room) => room.setUmbrella(participantId, enabled));
+    }
+
+    authenticate(roomCode: string, sessionToken: string): ParticipantView {
+        return this.rooms.require(roomCode).authenticate(sessionToken);
     }
 
     transferFacilitator(roomCode: string, actorId: string, targetId: string): void {

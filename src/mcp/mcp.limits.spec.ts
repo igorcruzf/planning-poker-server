@@ -1,5 +1,13 @@
 import { Logger } from '@nestjs/common';
-import { MCP_CALL_LIMIT, MCP_MAX_BODY_BYTES, MCP_MAX_SESSIONS, MCP_SESSION_IDLE_MS } from './mcp-limits';
+import {
+    MCP_CALL_LIMIT,
+    MCP_MAX_BODY_BYTES,
+    MCP_MAX_SESSIONS,
+    MCP_MAX_SESSIONS_PER_ADDRESS,
+    MCP_MAX_UNSEATED_PER_ADDRESS,
+    MCP_SESSION_IDLE_MS,
+    MCP_UNSEATED_SESSION_MS,
+} from './mcp-limits';
 import { callTool, errorOf, McpTestApp } from './testing/mcp-test-app';
 const INITIALIZE = {
     jsonrpc: '2.0',
@@ -44,20 +52,51 @@ describe('MCP endpoint limits', () => {
             code: 'rate_limited',
         });
     });
+    const fromAddress = (index: number) => ({
+        'X-Forwarded-For': `10.${Math.floor(index / 250)}.${index % 250}.1`,
+    });
     it('limits new sessions per address', async () => {
-        for (let attempt = 0; attempt < 10; attempt += 1) expect((await post(INITIALIZE)).status).toBe(200);
+        for (let attempt = 0; attempt < 10; attempt += 1) await post(INITIALIZE);
         const blocked = await post(INITIALIZE);
         expect(blocked.status).toBe(429);
         expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
     });
-    it('limits the number of simultaneous sessions', async () => {
-        for (let opened = 0; opened < MCP_MAX_SESSIONS; opened += 1) {
-            if (opened > 0 && opened % 10 === 0) world.clock.advance(60_000);
+    it('limits the simultaneous sessions of one address', async () => {
+        expect(MCP_MAX_SESSIONS_PER_ADDRESS).toBe(3);
+        expect(MCP_MAX_UNSEATED_PER_ADDRESS).toBe(5);
+        for (let opened = 0; opened < MCP_MAX_SESSIONS_PER_ADDRESS; opened += 1) {
             expect((await post(INITIALIZE)).status).toBe(200);
         }
-        world.clock.advance(60_000);
+        expect((await post(INITIALIZE)).status).toBe(429);
+        expect((await post(INITIALIZE, fromAddress(1))).status).toBe(200);
+    });
+    it('frees the address quota when its sessions end', async () => {
+        for (let opened = 0; opened < MCP_MAX_SESSIONS_PER_ADDRESS; opened += 1) await post(INITIALIZE);
+        world.scheduler.advance(MCP_UNSEATED_SESSION_MS);
+        expect((await post(INITIALIZE)).status).toBe(200);
+    });
+    it('limits the number of simultaneous sessions', async () => {
+        for (let opened = 0; opened < MCP_MAX_SESSIONS; opened += 1) {
+            expect((await post(INITIALIZE, fromAddress(opened))).status).toBe(200);
+        }
         expect(world.hub.openSessions).toBe(MCP_MAX_SESSIONS);
-        expect((await post(INITIALIZE)).status).toBe(503);
+        expect((await post(INITIALIZE, fromAddress(MCP_MAX_SESSIONS))).status).toBe(503);
+    });
+    it('expires a session that never joined a table after 60 seconds', async () => {
+        expect(MCP_UNSEATED_SESSION_MS).toBe(60_000);
+        await world.connectMcp();
+        world.scheduler.advance(MCP_UNSEATED_SESSION_MS - 1);
+        expect(world.hub.openSessions).toBe(1);
+        world.scheduler.advance(1);
+        expect(world.hub.openSessions).toBe(0);
+    });
+    it('switches a session to the normal idle expiry once it joins', async () => {
+        const { roomCode } = await seatedKiro();
+        world.scheduler.advance(MCP_UNSEATED_SESSION_MS);
+        expect(world.hub.openSessions).toBe(1);
+        world.scheduler.advance(MCP_SESSION_IDLE_MS - MCP_UNSEATED_SESSION_MS);
+        expect(world.hub.openSessions).toBe(0);
+        expect(world.rooms.snapshot(roomCode, null).participants.every(({ role }) => role !== 'bot')).toBe(true);
     });
     it('refuses a body above the maximum', async () => {
         const response = await post({ ...INITIALIZE, padding: 'x'.repeat(MCP_MAX_BODY_BYTES) });

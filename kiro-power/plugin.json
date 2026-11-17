@@ -1,0 +1,9 @@
+{
+    "name": "yakpoker",
+    "displayName": "YakPoker",
+    "version": "1.0.0",
+    "description": "Coloca o Kiro na mesa do YakPoker para dar um palpite de tamanho, com justificativa curta, nos cards do Jira.",
+    "keywords": ["yakpoker", "planning poker", "estimativa", "jira"],
+    "mcp": "mcp.json",
+    "skills": ["skills/estimar-card-yak"]
+}

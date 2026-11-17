@@ -44,7 +44,11 @@ describe('kiro:invite over a real Socket.IO connection', () => {
     const ack = async (client: SocketIoTestClient, event: string, payload: unknown = {}) =>
         (await client.emitWithAck(event, payload)) as Ack<unknown>;
     const seat = async (client: SocketIoTestClient, payload: Record<string, unknown>) => {
-        const result = await ack(client, 'room:create', { roomName: 'Sprint', participantName: 'Ana', ...payload });
+        const result = await ack(client, 'room:create', {
+            roomName: 'Sprint',
+            participantName: 'Ana',
+            ...payload,
+        });
         if (!result.ok) throw new Error('room:create failed');
         return result.data as RoomSession;
     };
@@ -72,13 +76,19 @@ describe('kiro:invite over a real Socket.IO connection', () => {
         const ana = await connect();
         await seat(ana, { settings: ALLOW_KIRO });
         const result = await ack(ana, 'kiro:invite');
-        expect(result).toMatchObject({ ok: true, data: { mcpUrl: `http://localhost:3001${MCP_PATH}` } });
+        expect(result).toMatchObject({
+            ok: true,
+            data: { mcpUrl: `http://localhost:3001${MCP_PATH}` },
+        });
         expect(app.get(KIRO_MCP_URL)).toBe(`http://localhost:3001${MCP_PATH}`);
     });
     it('answers kiro_disabled when the room does not allow Kiro', async () => {
         const ana = await connect();
         await seat(ana, {});
-        expect(await ack(ana, 'kiro:invite')).toEqual({ ok: false, error: { code: 'kiro_disabled' } });
+        expect(await ack(ana, 'kiro:invite')).toEqual({
+            ok: false,
+            error: { code: 'kiro_disabled' },
+        });
     });
     it('answers forbidden for a socket without a seat', async () => {
         const stranger = await connect();
@@ -90,8 +100,13 @@ describe('kiro:invite over a real Socket.IO connection', () => {
     it('rejects a payload that tries to name another participant', async () => {
         const ana = await connect();
         await seat(ana, { settings: ALLOW_KIRO });
-        const result = await ack(ana, 'kiro:invite', { participantId: 'p-someone' });
-        expect(result).toMatchObject({ ok: false, error: { code: 'invalid_payload' } });
+        const result = await ack(ana, 'kiro:invite', {
+            participantId: 'p-someone',
+        });
+        expect(result).toMatchObject({
+            ok: false,
+            error: { code: 'invalid_payload' },
+        });
     });
     it('keeps only the last invite of the same owner usable', async () => {
         const ana = await connect();
@@ -109,7 +124,10 @@ describe('kiro:invite over a real Socket.IO connection', () => {
         const invite = (await ack(ana, 'kiro:invite')) as Ack<KiroInvite>;
         if (!invite.ok) throw new Error('invite failed');
         app.get(RoomService).redeemKiroInvite(invite.data.inviteCode);
-        expect(await ack(ana, 'kiro:invite')).toEqual({ ok: false, error: { code: 'kiro_limit_per_owner', limit: 1 } });
+        expect(await ack(ana, 'kiro:invite')).toEqual({
+            ok: false,
+            error: { code: 'kiro_limit_per_owner', limit: 1 },
+        });
     });
     it('answers kiro_limit_per_room after three Kiros in the room', async () => {
         const owners = await Promise.all([connect(), connect(), connect(), connect()]);
@@ -121,6 +139,9 @@ describe('kiro:invite over a real Socket.IO connection', () => {
             if (!invite.ok) throw new Error('invite failed');
             rooms.redeemKiroInvite(invite.data.inviteCode);
         }
-        expect(await ack(owners[3], 'kiro:invite')).toEqual({ ok: false, error: { code: 'kiro_limit_per_room', limit: 3 } });
+        expect(await ack(owners[3], 'kiro:invite')).toEqual({
+            ok: false,
+            error: { code: 'kiro_limit_per_room', limit: 3 },
+        });
     });
 });

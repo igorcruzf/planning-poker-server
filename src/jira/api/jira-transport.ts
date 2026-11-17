@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { FetchFunction } from '../auth/atlassian-auth.client';
+import type { FetchFunction } from '../auth/atlassian-auth.client';
 import { JiraAppException, jiraError, rateLimitedError } from '../auth/jira-app.exception';
-import { JIRA_FETCH, JIRA_SLEEP, Sleep } from '../auth/jira-auth.tokens';
+import type { Sleep } from '../auth/jira-auth.tokens';
+import { JIRA_FETCH, JIRA_SLEEP } from '../auth/jira-auth.tokens';
 import {
     JiraAccessGrant,
     JiraSessionService,

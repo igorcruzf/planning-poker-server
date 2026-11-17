@@ -16,7 +16,8 @@ import {
 import { invalidPayloadFrom } from '../../gateway/session/invalid-payload';
 import { JiraCallContext } from '../api/jira-call';
 import { JiraAppException } from '../auth/jira-app.exception';
-import { HeaderTarget, applyJiraSessionHeaders, openJiraCall } from '../http/jira-http-session';
+import type { HeaderTarget } from '../http/jira-http-session';
+import { applyJiraSessionHeaders, openJiraCall } from '../http/jira-http-session';
 import { JiraRoomService } from './jira-room.service';
 
 const NO_STORE = 'no-store';

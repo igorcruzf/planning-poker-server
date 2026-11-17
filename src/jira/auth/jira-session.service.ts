@@ -99,7 +99,9 @@ export class JiraSessionService {
     }
 
     logout(blob: string): void {
-        this.requireCodec();
+        if (!this.isAuthentic(blob)) {
+            return;
+        }
         const key = SessionBlobCodec.fingerprint(blob);
         this.revokedBlobs.revoke(key, this.clock());
         const session = this.sessions.get(key);
@@ -117,6 +119,16 @@ export class JiraSessionService {
             if (session.retainUntil <= now) {
                 this.evict(session);
             }
+        }
+    }
+
+    private isAuthentic(blob: string): boolean {
+        const codec = this.requireCodec();
+        try {
+            codec.decode(blob);
+            return true;
+        } catch {
+            return false;
         }
     }
 

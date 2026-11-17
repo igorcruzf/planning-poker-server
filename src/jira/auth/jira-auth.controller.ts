@@ -96,10 +96,14 @@ export class JiraAuthController {
     @Post(JIRA_AUTH_PATHS.logout)
     @HttpCode(204)
     @Header('Cache-Control', NO_STORE)
-    closeSession(@Headers(JIRA_AUTHORIZATION_HEADER) authorization?: string): void {
+    closeSession(
+        @Headers(JIRA_AUTHORIZATION_HEADER) authorization: string | undefined,
+        @Req() request: IncomingMessage,
+    ): void {
         if (!this.login.enabled) {
             throw jiraError('jira_disabled');
         }
+        this.login.limitLogout(clientAddressOfRequest(request));
         const blob = parseBearerBlob(authorization);
         if (blob) {
             this.sessions.logout(blob);

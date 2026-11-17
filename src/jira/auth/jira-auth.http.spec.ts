@@ -12,7 +12,7 @@ import {
     jiraSessionResponseSchema,
 } from '../../contracts';
 import { AppModule } from '../../app.module';
-import { CALLBACK_RATE_LIMIT, JiraLoginService, LOGIN_RATE_LIMIT } from './jira-login.service';
+import { CALLBACK_RATE_LIMIT, JiraLoginService, LOGIN_RATE_LIMIT, LOGOUT_RATE_LIMIT } from './jira-login.service';
 import { jiraAuthModuleMetadata, JiraAuthModule } from './jira-auth.module';
 import { JiraSessionService } from './jira-session.service';
 import { JiraAuthConfig } from './jira-auth.config';
@@ -464,6 +464,22 @@ describe('Jira auth endpoints', () => {
 
     describe('rate limits per client address', () => {
         const from = (address: string) => ({ headers: { 'X-Forwarded-For': address } });
+
+        it('answers 429 rate_limited on logout after the limit and keeps other addresses working', async () => {
+            await start();
+            const logout = (address: string) =>
+                post('/api/auth/jira/logout', undefined, { 'X-Forwarded-For': address });
+            for (let attempt = 0; attempt < LOGOUT_RATE_LIMIT.limit; attempt += 1) {
+                expect((await logout('203.0.113.7')).status).toBe(204);
+            }
+            const blocked = await logout('203.0.113.7');
+            expect(blocked.status).toBe(429);
+            expect((await blocked.json()).error).toMatchObject({
+                code: 'rate_limited',
+                retryAfterMs: expect.any(Number),
+            });
+            expect((await logout('203.0.113.8')).status).toBe(204);
+        });
 
         it('answers 429 rate_limited on login after the limit and keeps other addresses working', async () => {
             await start();

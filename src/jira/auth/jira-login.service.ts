@@ -22,6 +22,7 @@ import { OneTimeStore } from './one-time-store';
 export const MAX_PENDING_LOGIN_CODES = 1000;
 export const LOGIN_RATE_LIMIT: RateWindow = { limit: 20, windowMs: 60_000 };
 export const CALLBACK_RATE_LIMIT: RateWindow = { limit: 30, windowMs: 60_000 };
+export const LOGOUT_RATE_LIMIT: RateWindow = { limit: 30, windowMs: 60_000 };
 
 const AUTHORIZE_URL = 'https://auth.atlassian.com/authorize';
 
@@ -53,6 +54,7 @@ export class JiraLoginService {
     private readonly consumedStates: ConsumedNonces;
     private readonly loginLimiter: RateLimiter;
     private readonly callbackLimiter: RateLimiter;
+    private readonly logoutLimiter: RateLimiter;
     private readonly signer?: LoginStateSigner;
 
     constructor(
@@ -69,11 +71,19 @@ export class JiraLoginService {
         this.consumedStates = new ConsumedNonces(clock);
         this.loginLimiter = new RateLimiter(LOGIN_RATE_LIMIT, { now: clock });
         this.callbackLimiter = new RateLimiter(CALLBACK_RATE_LIMIT, { now: clock });
+        this.logoutLimiter = new RateLimiter(LOGOUT_RATE_LIMIT, { now: clock });
         this.signer = config.enabled ? new LoginStateSigner(config.encryptionKey, clock) : undefined;
     }
 
     get enabled(): boolean {
         return this.config.enabled;
+    }
+
+    limitLogout(address: string): void {
+        const retryAfterMs = this.logoutLimiter.consume(address);
+        if (retryAfterMs !== null) {
+            throw rateLimitedError('rate_limited', retryAfterMs);
+        }
     }
 
     beginLogin(address: string, mesa?: string): LoginStart {

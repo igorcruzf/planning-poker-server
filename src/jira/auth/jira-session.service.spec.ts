@@ -236,6 +236,17 @@ describe('JiraSessionService', () => {
         expect(client.refresh).not.toHaveBeenCalled();
     });
 
+    it('keeps an existing revocation after thousands of logouts with garbage', async () => {
+        const service = createService();
+        service.logout(blob);
+        for (let n = 0; n < REVOKED_BLOBS_LIMIT + 1000; n += 1) {
+            service.logout(`garbage-${n}`);
+        }
+        service.logout(new SessionBlobCodec(randomBytes(32)).encode(payload));
+        expect((await errorOf(service.getAccessToken(blob))).code).toBe('jira_reconnect_required');
+        expect(client.refresh).not.toHaveBeenCalled();
+    });
+
     it('revokes a blob that was not in the cache at logout', async () => {
         const service = createService();
         service.logout(blob);

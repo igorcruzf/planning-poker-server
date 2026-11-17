@@ -56,6 +56,8 @@ export interface Ballot {
 }
 
 export const HISTORY_MAX_ENTRIES = 200;
+export const MAX_PARTICIPANTS_PER_ROOM = 40;
+export const DISCONNECTED_PARTICIPANT_TTL_MS = 15 * 60 * 1000;
 
 const ballotOf = (participant: Participant): Ballot => ({
     participantId: participant.id,
@@ -168,6 +170,7 @@ export class Room {
         if (request.sessionToken !== undefined) return this.reconnect(request.sessionToken);
         if (request.role === 'spectator' && !this._settings.allowSpectators) throw domainErrors.spectatorsDisabled();
         if (isReservedForKiro(request.name)) throw domainErrors.nameTaken();
+        this.assertRoomHasSeat();
         this.assertNameAvailable(request.name);
         const sessionToken = generateSecret();
         const participant = this.seat({ name: request.name, role: request.role, tokenHash: hashSecret(sessionToken) });
@@ -206,17 +209,18 @@ export class Room {
     }
 
     leave(participantId: string): void {
-        const leaving = this.requireSeat(participantId);
-        this.removeParticipant(leaving);
-        if (isHuman(leaving)) {
-            this.roster.filter((seat) => seat.ownerId === leaving.id).forEach((seat) => this.removeParticipant(seat));
-            this.invites.discardOwner(leaving.id);
-        }
-        if (this._facilitatorId === leaving.id) this._facilitatorId = this.nextFacilitatorId();
-        this.refreshOccupancy();
-        this.settleAutoReveal();
+        this.evict(this.requireSeat(participantId));
     }
-
+    pruneAbsent(now: number): boolean {
+        const absent = this.roster.filter(
+            (seat) =>
+                isHuman(seat) &&
+                seat.disconnectedAt !== null &&
+                now - seat.disconnectedAt > DISCONNECTED_PARTICIPANT_TTL_MS,
+        );
+        absent.forEach((seat) => this.evict(seat));
+        return absent.length > 0;
+    }
     setRole(participantId: string, role: HumanRole): boolean {
         const participant = this.requireHuman(participantId);
         if (participant.role === role) return false;
@@ -350,6 +354,7 @@ export class Room {
         if (!owner) throw domainErrors.inviteInvalid();
         if (!this._settings.allowKiro) throw domainErrors.kiroDisabled();
         this.assertKiroSeatAvailable(owner.id);
+        this.assertRoomHasSeat();
         const seatName = `${KIRO_SEAT_NAME_PREFIX}${owner.name}`;
         this.assertNameAvailable(seatName);
         const seat = this.seat({ name: seatName, role: 'bot', ownerId: owner.id });
@@ -410,6 +415,19 @@ export class Room {
         return participant;
     }
 
+    private evict(leaving: Participant): void {
+        this.removeParticipant(leaving);
+        if (isHuman(leaving)) {
+            this.roster.filter((seat) => seat.ownerId === leaving.id).forEach((seat) => this.removeParticipant(seat));
+            this.invites.discardOwner(leaving.id);
+        }
+        if (this._facilitatorId === leaving.id) this._facilitatorId = this.nextFacilitatorId();
+        this.refreshOccupancy();
+        this.settleAutoReveal();
+    }
+    private assertRoomHasSeat(): void {
+        if (this.roster.length >= MAX_PARTICIPANTS_PER_ROOM) throw domainErrors.roomFull();
+    }
     private removeParticipant(participant: Participant): void {
         if (this._phase !== 'voting' && participant.vote !== null) this._departedBallots.push(ballotOf(participant));
         this.roster.splice(this.roster.indexOf(participant), 1);

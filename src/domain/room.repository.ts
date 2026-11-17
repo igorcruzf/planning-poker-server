@@ -1,5 +1,6 @@
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { roomCodeSchema, RoomCreatePayload } from '../contracts';
+import { ChangeListener, ChangeNotifier } from './change-notifier';
 import { Clock } from './clock';
 import { domainErrors } from './domain-error';
 import { RoomCodeGenerator } from './room-code';
@@ -12,6 +13,7 @@ const MAX_CODE_ATTEMPTS = 20;
 @Injectable()
 export class RoomRepository implements OnModuleInit, OnModuleDestroy {
     private readonly rooms = new Map<string, Room>();
+    private readonly pruned = new ChangeNotifier<string>();
     private sweeper: NodeJS.Timeout | null = null;
 
     constructor(
@@ -59,9 +61,13 @@ export class RoomRepository implements OnModuleInit, OnModuleDestroy {
         return [...this.rooms.values()].find((room) => !room.isExpired(now) && room.hasKiroInvite(inviteCode));
     }
 
+    onPruned(listener: ChangeListener<string>): () => void {
+        return this.pruned.subscribe(listener);
+    }
     sweep(now: number): void {
         for (const [code, room] of this.rooms) {
             if (room.isExpired(now)) this.rooms.delete(code);
+            else if (room.pruneAbsent(now)) this.pruned.notify(code);
         }
     }
 

@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Header, Headers, HttpCode, Post, Query, Redirect, Res } from '@nestjs/common';
+import type { IncomingMessage } from 'node:http';
+import { Body, Controller, Get, Header, Headers, HttpCode, Post, Query, Redirect, Req, Res } from '@nestjs/common';
+import { clientAddressOfRequest } from '../../gateway/session/client-address';
 import {
     JIRA_API_PATHS,
     JIRA_AUTH_PATHS,
@@ -35,7 +37,11 @@ export class JiraAuthController {
     @Get(JIRA_AUTH_PATHS.login)
     @Header('Cache-Control', NO_STORE)
     @Redirect()
-    start(@Query() query: unknown, @Res({ passthrough: true }) response: HeaderWriter) {
+    start(
+        @Query() query: unknown,
+        @Req() request: IncomingMessage,
+        @Res({ passthrough: true }) response: HeaderWriter,
+    ) {
         if (!this.login.enabled) {
             return {
                 url: this.login.errorRedirect('jira_disabled'),
@@ -46,7 +52,7 @@ export class JiraAuthController {
         if (!parsed.success) {
             throw this.invalidQuery(parsed.error.issues);
         }
-        const { url, setCookie } = this.login.beginLogin(parsed.data.mesa);
+        const { url, setCookie } = this.login.beginLogin(clientAddressOfRequest(request), parsed.data.mesa);
         response.setHeader('Set-Cookie', setCookie);
         return { url, statusCode: FOUND };
     }
@@ -57,6 +63,7 @@ export class JiraAuthController {
     async callback(
         @Query() query: unknown,
         @Headers('cookie') cookie: string | undefined,
+        @Req() request: IncomingMessage,
         @Res({ passthrough: true }) response: HeaderWriter,
     ) {
         if (!this.login.enabled) {
@@ -65,7 +72,7 @@ export class JiraAuthController {
                 statusCode: FOUND,
             };
         }
-        const { url, setCookie } = await this.login.completeLogin(query, cookie);
+        const { url, setCookie } = await this.login.completeLogin(clientAddressOfRequest(request), query, cookie);
         response.setHeader('Set-Cookie', setCookie);
         return { url, statusCode: FOUND };
     }
@@ -89,10 +96,14 @@ export class JiraAuthController {
     @Post(JIRA_AUTH_PATHS.logout)
     @HttpCode(204)
     @Header('Cache-Control', NO_STORE)
-    closeSession(@Headers(JIRA_AUTHORIZATION_HEADER) authorization?: string): void {
+    closeSession(
+        @Headers(JIRA_AUTHORIZATION_HEADER) authorization: string | undefined,
+        @Req() request: IncomingMessage,
+    ): void {
         if (!this.login.enabled) {
             throw jiraError('jira_disabled');
         }
+        this.login.limitLogout(clientAddressOfRequest(request));
         const blob = parseBearerBlob(authorization);
         if (blob) {
             this.sessions.logout(blob);

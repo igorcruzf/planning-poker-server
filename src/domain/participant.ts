@@ -51,5 +51,24 @@ export const nameSkeleton = (name: string): string =>
         .toLowerCase()
         .replace(INVISIBLE_OR_SPACE, '')
         .replace(CONFUSABLE_PATTERN, (letter) => CONFUSABLE_LETTERS[letter]);
+
+const PREFIX_CONFUSABLE_LETTERS: Readonly<Record<string, string>> = {
+    ...CONFUSABLE_LETTERS,
+    '\u0131': 'i',
+    '\u0138': 'k',
+    '\u03b9': 'i',
+    '\u0501': 'd',
+};
+const PREFIX_IGNORED =
+    /[\p{M}\p{Default_Ignorable_Code_Point}\p{Cf}\p{Z}\s\u2800\u3164\u115f\u1160]/gu;
+const PREFIX_CONFUSABLE_PATTERN = new RegExp(`[${Object.keys(PREFIX_CONFUSABLE_LETTERS).join('')}]`, 'gu');
+const REPEATED_LETTER = /(.)\1+/gu;
+const reservedPrefixSkeleton = (name: string): string =>
+    name
+        .normalize('NFKD')
+        .toLowerCase()
+        .replace(PREFIX_IGNORED, '')
+        .replace(PREFIX_CONFUSABLE_PATTERN, (letter) => PREFIX_CONFUSABLE_LETTERS[letter])
+        .replace(REPEATED_LETTER, '$1');
 export const isReservedForKiro = (name: string): boolean =>
-    nameSkeleton(name).startsWith(nameSkeleton(KIRO_SEAT_NAME_PREFIX));
+    reservedPrefixSkeleton(name).startsWith(reservedPrefixSkeleton(KIRO_SEAT_NAME_PREFIX));

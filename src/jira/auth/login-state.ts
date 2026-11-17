@@ -111,7 +111,7 @@ export class ConsumedNonces {
             this.sweep();
         }
         if (this.expiries.size >= this.maxEntries) {
-            return false;
+            this.expiries.delete(this.expiries.keys().next().value!);
         }
         this.expiries.set(nonce, expiresAt);
         return true;

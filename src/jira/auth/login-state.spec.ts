@@ -111,12 +111,23 @@ describe('ConsumedNonces', () => {
         expect(nonces.size).toBe(0);
     });
 
-    it('refuses new nonces when full and nothing has expired, and recovers after the sweep', () => {
+    it('discards the oldest nonce when full instead of refusing new ones', () => {
         const nonces = new ConsumedNonces(() => now, 2);
         expect(nonces.consume('a', now + 100)).toBe(true);
         expect(nonces.consume('b', now + 100)).toBe(true);
-        expect(nonces.consume('c', now + 100)).toBe(false);
-        now += 100;
         expect(nonces.consume('c', now + 100)).toBe(true);
+        expect(nonces.size).toBe(2);
+        expect(nonces.consume('c', now + 100)).toBe(false);
+        expect(nonces.consume('b', now + 100)).toBe(false);
+        expect(nonces.consume('a', now + 100)).toBe(true);
+    });
+
+    it('prefers dropping expired nonces over the oldest live one when full', () => {
+        const nonces = new ConsumedNonces(() => now, 2);
+        nonces.consume('short', now + 10);
+        nonces.consume('long', now + 1000);
+        now += 10;
+        expect(nonces.consume('c', now + 1000)).toBe(true);
+        expect(nonces.consume('long', now + 1000)).toBe(false);
     });
 });

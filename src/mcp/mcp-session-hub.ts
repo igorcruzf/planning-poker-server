@@ -6,23 +6,27 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { Clock } from '../domain/clock';
 import { CancelTimer, Scheduler } from '../gateway/session/scheduler';
+import { clientAddressOfRequest } from '../gateway/session/client-address';
 import { RateLimiter } from '../gateway/session/rate-limiter';
 import { createKiroMcpServer } from './kiro-mcp-server';
 import { KiroSession } from './kiro-session';
 import { KiroTableService } from './kiro-table.service';
 import {
     MCP_ADDRESS_INITIALIZE_LIMIT,
-    MCP_ADDRESS_MAX_LENGTH,
     MCP_CALL_LIMIT,
     MCP_JOIN_ATTEMPT_LIMIT,
     MCP_MAX_BODY_BYTES,
     MCP_MAX_SESSIONS,
+    MCP_MAX_SESSIONS_PER_ADDRESS,
+    MCP_MAX_UNSEATED_PER_ADDRESS,
     MCP_SESSION_IDLE_MS,
+    MCP_UNSEATED_SESSION_MS,
 } from './mcp-limits';
 export type McpRequest = IncomingMessage;
 export type McpResponse = ServerResponse;
 interface OpenSession {
     id: string | null;
+    readonly address: string;
     readonly session: KiroSession;
     readonly server: McpServer;
     readonly transport: StreamableHTTPServerTransport;
@@ -30,7 +34,6 @@ interface OpenSession {
     released: boolean;
 }
 const SESSION_HEADER = 'mcp-session-id';
-const FORWARDED_FOR_HEADER = 'x-forwarded-for';
 const JSON_RPC_SERVER_ERROR = -32000;
 const MILLISECONDS_PER_SECOND = 1000;
 const NO_OP = () => undefined;
@@ -41,7 +44,7 @@ export class McpSessionHub implements OnModuleDestroy {
     private readonly callLimiter: RateLimiter;
     private readonly joinLimiter: RateLimiter;
     private readonly initializeLimiter: RateLimiter;
-    private opening = 0;
+    private readonly live = new Set<OpenSession>();
     constructor(
         private readonly table: KiroTableService,
         private readonly scheduler: Scheduler,
@@ -59,10 +62,12 @@ export class McpSessionHub implements OnModuleDestroy {
         const sessionId = headerOf(req, SESSION_HEADER);
         if (sessionId !== undefined) return this.forward(sessionId, req, res, body);
         if (req.method !== 'POST' || !isInitializeRequest(body)) return reply(res, 400, 'Sessão MCP ausente');
-        const retryAfterMs = this.initializeLimiter.consume(addressOf(req));
+        const address = clientAddressOfRequest(req);
+        const retryAfterMs = this.initializeLimiter.consume(address);
         if (retryAfterMs !== null) return reply(res, 429, 'Muitas tentativas', retryAfterMs);
-        if (this.sessions.size + this.opening >= MCP_MAX_SESSIONS) return reply(res, 503, 'Sem vagas no momento');
-        await this.open(req, res, body);
+        if (this.live.size >= MCP_MAX_SESSIONS) return reply(res, 503, 'Sem vagas no momento');
+        if (this.exceedsAddressQuota(address)) return reply(res, 429, 'Muitas sessões abertas por este endereço');
+        await this.open(req, res, body, address);
     }
     onModuleDestroy(): void {
         [...this.sessions.values()].forEach((open) => this.release(open));
@@ -72,9 +77,14 @@ export class McpSessionHub implements OnModuleDestroy {
         if (!open) return reply(res, 404, 'Sessão MCP não encontrada');
         this.touch(open);
         await open.transport.handleRequest(req, res, body);
+        this.touch(open);
     }
-    private async open(req: McpRequest, res: McpResponse, body: unknown): Promise<void> {
-        this.opening += 1;
+    private exceedsAddressQuota(address: string): boolean {
+        const fromAddress = [...this.live].filter((open) => open.address === address);
+        const unseated = fromAddress.filter((open) => open.session.seat === null);
+        return fromAddress.length >= MCP_MAX_SESSIONS_PER_ADDRESS || unseated.length >= MCP_MAX_UNSEATED_PER_ADDRESS;
+    }
+    private async open(req: McpRequest, res: McpResponse, body: unknown, address: string): Promise<void> {
         const session = new KiroSession();
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
@@ -84,7 +94,8 @@ export class McpSessionHub implements OnModuleDestroy {
         const server = createKiroMcpServer(this.table, session, {
             admit: (tool) => this.admit(open, tool === 'join_table'),
         });
-        const open: OpenSession = { id: null, session, server, transport, cancelIdle: NO_OP, released: false };
+        const open: OpenSession = { id: null, address, session, server, transport, cancelIdle: NO_OP, released: false };
+        this.live.add(open);
         transport.onclose = () => this.release(open);
         session.onClose(() => {
             this.scheduler.after(0, () => this.release(open));
@@ -93,7 +104,6 @@ export class McpSessionHub implements OnModuleDestroy {
             await server.connect(transport);
             await transport.handleRequest(req, res, body);
         } finally {
-            this.opening -= 1;
             if (open.id === null) this.release(open);
         }
     }
@@ -109,12 +119,15 @@ export class McpSessionHub implements OnModuleDestroy {
         return blocked.length > 0 ? Math.max(...blocked) : null;
     }
     private touch(open: OpenSession): void {
+        if (open.released) return;
         open.cancelIdle();
-        open.cancelIdle = this.scheduler.after(MCP_SESSION_IDLE_MS, () => this.release(open));
+        const expiresAfterMs = open.session.seat === null ? MCP_UNSEATED_SESSION_MS : MCP_SESSION_IDLE_MS;
+        open.cancelIdle = this.scheduler.after(expiresAfterMs, () => this.release(open));
     }
     private release(open: OpenSession): void {
         if (open.released) return;
         open.released = true;
+        this.live.delete(open);
         open.cancelIdle();
         if (open.id !== null) {
             this.sessions.delete(open.id);
@@ -137,10 +150,6 @@ export class McpSessionHub implements OnModuleDestroy {
 const headerOf = (req: McpRequest, name: string): string | undefined => {
     const value = req.headers[name];
     return Array.isArray(value) ? value[0] : value;
-};
-const addressOf = (req: McpRequest): string => {
-    const forwarded = headerOf(req, FORWARDED_FOR_HEADER)?.split(',').pop()?.trim();
-    return (forwarded || req.socket.remoteAddress || 'unknown').slice(0, MCP_ADDRESS_MAX_LENGTH);
 };
 const isTooLarge = (req: McpRequest, body: unknown): boolean => {
     const declared = Number(headerOf(req, 'content-length'));

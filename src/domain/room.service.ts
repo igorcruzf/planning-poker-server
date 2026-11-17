@@ -62,7 +62,9 @@ export interface RoomChange {
 export class RoomService {
     private readonly changes = new ChangeNotifier<RoomChange>();
 
-    constructor(private readonly rooms: RoomRepository) {}
+    constructor(private readonly rooms: RoomRepository) {
+        this.rooms.onPruned((roomCode) => this.changes.notify({ roomCode, reason: 'left' }));
+    }
 
     onChange(listener: ChangeListener<RoomChange>): () => void {
         return this.changes.subscribe(listener);

@@ -33,14 +33,24 @@ const asHttpUrl = (value: string | undefined): string | undefined => {
     const parsed = httpUrlSchema.safeParse(value);
     return parsed.success ? parsed.data : undefined;
 };
-
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1']);
+const asFrontUrl = (value: string | undefined, env: Environment): string | undefined => {
+    const url = asHttpUrl(value);
+    if (!url) return undefined;
+    const { protocol, hostname } = new URL(url);
+    const isLocalDevelopment = protocol === 'http:' && LOOPBACK_HOSTS.has(hostname) && env.NODE_ENV !== 'production';
+    return protocol === 'https:' || isLocalDevelopment ? url : undefined;
+};
 const resolveFrontUrl = (env: Environment): string => {
     const origins = [corsOrigin(env.CORS_ORIGIN)].flat();
-    const fallback = asHttpUrl(origins[0]) ?? DEFAULT_CORS_ORIGINS[0];
-    const configured = asHttpUrl(read(env, 'FRONT_URL'));
+    const fallback = asFrontUrl(origins[0], env) ?? DEFAULT_CORS_ORIGINS[0];
+    const requested = read(env, 'FRONT_URL');
+    const configured = asFrontUrl(requested, env);
+    if (requested && !configured) {
+        logger.warn('FRONT_URL must be https (or http on localhost outside production); using the default front');
+    }
     return new URL(configured ?? fallback).origin;
 };
-
 const decodeEncryptionKey = (value: string): Buffer | undefined => {
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
         return undefined;

@@ -61,6 +61,7 @@ export interface RoomChange {
 @Injectable()
 export class RoomService {
     private readonly changes = new ChangeNotifier<RoomChange>();
+    private readonly publishedPendingVoters = new WeakMap<Room, string>();
 
     constructor(private readonly rooms: RoomRepository) {
         this.rooms.onPruned((roomCode) => this.changes.notify({ roomCode, reason: 'left' }));
@@ -79,14 +80,19 @@ export class RoomService {
     }
 
     settle(roomCode: string): PhaseOutcome {
-        return this.mutateOnPhaseChange(roomCode, 'settled', (room) => room.settle());
+        const room = this.rooms.require(roomCode);
+        const phaseBefore = room.phase;
+        const outcome = room.settle();
+        const pendingVotersChanged = this.publishedPendingVoters.get(room) !== pendingVotersKey(room);
+        if (outcome.phase !== phaseBefore || pendingVotersChanged) this.publish(room, 'settled');
+        return outcome;
     }
 
     createRoom(payload: RoomCreatePayload): RoomSession {
         const room = this.rooms.create(payload);
         try {
             const { participantId, sessionToken } = room.join({ name: payload.participantName, role: 'player' });
-            this.changes.notify({ roomCode: room.code, reason: 'created' });
+            this.publish(room, 'created');
             return { roomCode: room.code, participantId, sessionToken };
         } catch (error) {
             this.rooms.discard(room.code);
@@ -173,7 +179,7 @@ export class RoomService {
         const room = this.rooms.findByKiroInvite(inviteCode);
         if (!room) throw domainErrors.inviteInvalid();
         const { participantId, seatName } = room.redeemKiroInvite(inviteCode);
-        this.changes.notify({ roomCode: room.code, reason: 'kiro_seated' });
+        this.publish(room, 'kiro_seated');
         return { roomCode: room.code, roomName: room.name, participantId, seatName };
     }
 
@@ -184,13 +190,13 @@ export class RoomService {
     private mutate<Result>(roomCode: string, reason: RoomChangeReason, action: (room: Room) => Result): Result {
         const room = this.rooms.require(roomCode);
         const result = action(room);
-        this.changes.notify({ roomCode: room.code, reason });
+        this.publish(room, reason);
         return result;
     }
 
     private mutateIfChanged(roomCode: string, reason: RoomChangeReason, action: (room: Room) => boolean): void {
         const room = this.rooms.require(roomCode);
-        if (action(room)) this.changes.notify({ roomCode: room.code, reason });
+        if (action(room)) this.publish(room, reason);
     }
 
     private mutateOnPhaseChange(
@@ -201,7 +207,14 @@ export class RoomService {
         const room = this.rooms.require(roomCode);
         const phaseBefore = room.phase;
         const outcome = action(room);
-        if (outcome.phase !== phaseBefore) this.changes.notify({ roomCode: room.code, reason });
+        if (outcome.phase !== phaseBefore) this.publish(room, reason);
         return outcome;
     }
+
+    private publish(room: Room, reason: RoomChangeReason): void {
+        this.publishedPendingVoters.set(room, pendingVotersKey(room));
+        this.changes.notify({ roomCode: room.code, reason });
+    }
 }
+
+const pendingVotersKey = (room: Room): string => JSON.stringify(room.pendingVoterIds());

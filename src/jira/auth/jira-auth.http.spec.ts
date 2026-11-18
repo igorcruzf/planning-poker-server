@@ -391,6 +391,58 @@ describe('Jira auth endpoints', () => {
             expect(atlassianCalls).toEqual([]);
         });
 
+        describe('with a mesa in the state', () => {
+            const failedWithMesa = `${FRONT}/?mesa=${MESA}&jira_error=jira_login_failed`;
+
+            it('keeps the mesa when the user denies consent', async () => {
+                await start();
+                const { location, cookie } = await loginState(MESA);
+                const response = await get(
+                    `/api/auth/jira/callback?error=access_denied&state=${location.searchParams.get('state')}`,
+                    { headers: { Cookie: cookie } },
+                );
+                expect(response.headers.get('location')).toBe(failedWithMesa);
+            });
+
+            it('keeps the mesa when the token exchange fails', async () => {
+                await start();
+                tokenExchangeResponse = () => jsonResponse({ error: 'invalid_grant' }, 400);
+                const { location, cookie } = await loginState(MESA);
+                const response = await callback(location.searchParams.get('state')!, cookie);
+                expect(response.headers.get('location')).toBe(failedWithMesa);
+            });
+
+            it('keeps the mesa when the state is reused', async () => {
+                await start();
+                const { location, cookie } = await loginState(MESA);
+                const state = location.searchParams.get('state')!;
+                await callback(state, cookie);
+                expect((await callback(state, cookie)).headers.get('location')).toBe(failedWithMesa);
+            });
+
+            it('keeps the mesa when the callback is rate limited', async () => {
+                await start();
+                const blockedAddress = { 'X-Forwarded-For': '203.0.113.7' };
+                for (let attempt = 0; attempt < CALLBACK_RATE_LIMIT.limit; attempt += 1) {
+                    await get('/api/auth/jira/callback?error=x', { headers: blockedAddress });
+                }
+                const { location, cookie } = await loginState(MESA);
+                const blocked = await get(`/api/auth/jira/callback?code=c&state=${location.searchParams.get('state')}`, {
+                    headers: { ...blockedAddress, Cookie: cookie },
+                });
+                expect(blocked.headers.get('location')).toBe(failedWithMesa);
+                expect(atlassianCalls).toHaveLength(0);
+            });
+
+            it('drops the mesa when the browser did not start the login', async () => {
+                await start();
+                const { location } = await loginState(MESA);
+                const other = await loginState();
+                const response = await callback(location.searchParams.get('state')!, other.cookie);
+                expect(response.headers.get('location')).toBe(failedRedirect);
+            });
+        });
+
         it('clears the bind cookie on the callback', async () => {
             await start();
             const { location, cookie } = await loginState();
@@ -542,6 +594,19 @@ describe('Jira auth endpoints', () => {
             await start(disabled);
             const response = await get('/api/auth/jira/login');
             expect(response.status).toBe(302);
+            expect(response.headers.get('location')).toBe(`${FRONT}/?jira_error=jira_disabled`);
+        });
+
+        it('keeps a valid mesa on the jira_disabled redirect of the login', async () => {
+            await start(disabled);
+            const response = await get(`/api/auth/jira/login?mesa=${MESA}`);
+            expect(response.status).toBe(302);
+            expect(response.headers.get('location')).toBe(`${FRONT}/?mesa=${MESA}&jira_error=jira_disabled`);
+        });
+
+        it('never echoes an invalid mesa on the jira_disabled redirect of the login', async () => {
+            await start(disabled);
+            const response = await get('/api/auth/jira/login?mesa=%22%3E%3Cscript%3E');
             expect(response.headers.get('location')).toBe(`${FRONT}/?jira_error=jira_disabled`);
         });
 

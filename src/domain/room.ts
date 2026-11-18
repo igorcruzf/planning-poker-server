@@ -272,7 +272,7 @@ export class Room {
     }
 
     nextPresenceDeadline(): number | null {
-        if (this._phase !== 'voting' || !this._settings.autoReveal) return null;
+        if (this._phase !== 'voting') return null;
         const now = this.dependencies.clock.now();
         const deadlines = this.roster
             .filter((player) => isPlayer(player) && player.vote === null && player.disconnectedAt !== null)

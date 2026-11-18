@@ -50,9 +50,14 @@ describe('RoomTimers', () => {
         expect(scheduler.pendingCount).toBe(0);
     });
 
-    it('does not schedule a presence timer when auto reveal is off', () => {
-        const { code, bia } = seatTwoPlayers({ autoReveal: false });
+    it('schedules a presence timer that keeps voting open when auto reveal is off', () => {
+        const { code, ana, bia } = seatTwoPlayers({ autoReveal: false });
+        rooms.vote(code, ana, { roundId: 1, value: 'M' });
         rooms.disconnect(code, bia);
+        expect(scheduler.pendingCount).toBe(1);
+        scheduler.advance(30_000);
+        expect(phaseOf(code)).toBe('voting');
+        expect(rooms.getRoom(code).pendingVoterIds()).toEqual([]);
         expect(scheduler.pendingCount).toBe(0);
     });
 

@@ -158,6 +158,25 @@ describe('RoomService change notification', () => {
         jest.restoreAllMocks();
     });
 
+    it('notifies the settle when the grace period drops a pending voter without the auto reveal', () => {
+        const owner = service.createRoom(createPayload({ settings: { ...createPayload().settings, autoReveal: false } }));
+        const bia = service.join({ roomCode: owner.roomCode, name: 'Bia', role: 'player' });
+        const caio = service.join({ roomCode: owner.roomCode, name: 'Caio', role: 'player' });
+        service.vote(owner.roomCode, owner.participantId, { roundId: 1, value: 'P' });
+        service.vote(owner.roomCode, bia.participantId, { roundId: 1, value: 'M' });
+        service.disconnect(owner.roomCode, caio.participantId);
+        const deadline = service.nextPresenceDeadline(owner.roomCode)!;
+        expect(deadline).toBeGreaterThan(Date.now());
+        service.onChange((change) => changes.push(change));
+        jest.spyOn(Date, 'now').mockReturnValue(deadline);
+        expect(service.settle(owner.roomCode)).toEqual({ phase: 'voting' });
+        service.settle(owner.roomCode);
+        expect(changes).toEqual([{ roomCode: owner.roomCode, reason: 'settled' }]);
+        expect(service.snapshot(owner.roomCode, bia.participantId)).toMatchObject({ round: { pendingVoterIds: [] } });
+        expect(service.nextPresenceDeadline(owner.roomCode)).toBeNull();
+        jest.restoreAllMocks();
+    });
+
     it('does not leave an orphan room behind when the creator name is refused', () => {
         const repository = context.get(RoomRepository);
         expect(() => service.createRoom(createPayload({ participantName: 'Kiro do Ana' }))).toThrow(DomainError);

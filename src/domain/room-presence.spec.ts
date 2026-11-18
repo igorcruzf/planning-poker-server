@@ -54,11 +54,12 @@ describe('Next presence deadline', () => {
         expect(room.nextPresenceDeadline()).toBeNull();
     });
 
-    it('is null when the auto reveal is off', () => {
-        const { room, bia } = autoRevealFixture();
-        room.markDisconnected(bia.id);
+    it('is the grace deadline of a disconnected pending player even when the auto reveal is off', () => {
+        const { room, clock, bia } = autoRevealFixture();
         room.updateSettings(room.facilitatorId!, { autoReveal: false });
-        expect(room.nextPresenceDeadline()).toBeNull();
+        const disconnectedAt = clock.now();
+        room.markDisconnected(bia.id);
+        expect(room.nextPresenceDeadline()).toBe(disconnectedAt + DISCONNECTED_PLAYER_GRACE_MS);
     });
 
     it('ignores players that already voted, spectators, and deadlines already past', () => {

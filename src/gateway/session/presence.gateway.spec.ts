@@ -77,3 +77,38 @@ describe('presence timers over a real Socket.IO connection', () => {
         ).toBe(false);
     });
 });
+describe('presence timers over a real Socket.IO connection without auto reveal', () => {
+    let gateway: GatewayTestApp;
+    let ana: SocketIoTestClient;
+    let bia: SocketIoTestClient;
+    let caioId: string;
+    const withoutCaio = (state: RoomState) =>
+        state.round.phase === 'voting' && state.round.pendingVoterIds.length === 0;
+    beforeEach(async () => {
+        jest.useFakeTimers({ doNotFake: [...REAL_APIS], now: Date.now() });
+        gateway = await GatewayTestApp.start();
+        ana = await gateway.connect();
+        bia = await gateway.connect();
+        const caio = await gateway.connect();
+        const { roomCode } = await createRoom(ana, { settings: { autoReveal: false, countdownSeconds: 0 } });
+        await joinRoom(bia, roomCode, 'Bia');
+        ({ participantId: caioId } = await joinRoom(caio, roomCode, 'Caio'));
+        await ackOf(ana, 'round:vote', { roundId: 1, value: 'PP' });
+        await ackOf(bia, 'round:vote', { roundId: 1, value: 'P' });
+        await caio.close();
+        await stateWhere(bia, (state) => state.participants.some(({ presence }) => presence === 'disconnected'));
+    });
+    afterEach(async () => {
+        await gateway.close();
+        jest.useRealTimers();
+    });
+    it('drops the missing voter from the pending list at 30 s and lets a regular player reveal', async () => {
+        jest.advanceTimersByTime(DISCONNECTED_PLAYER_GRACE_MS);
+        const [anaState, biaState] = await Promise.all([stateWhere(ana, withoutCaio), stateWhere(bia, withoutCaio)]);
+        expect(anaState.round.phase === 'voting' && anaState.round.pendingVoterIds).not.toContain(caioId);
+        expect(biaState.participants.some(({ id }) => id === caioId)).toBe(true);
+        const reveal = await ackOf(bia, 'round:reveal', { roundId: 1, confirmMissingVotes: false });
+        expect(reveal.ok).toBe(true);
+        expect((await stateWhere(bia, isRevealed)).round.phase).toBe('revealed');
+    });
+});

@@ -42,13 +42,13 @@ export class JiraAuthController {
         @Req() request: IncomingMessage,
         @Res({ passthrough: true }) response: HeaderWriter,
     ) {
+        const parsed = jiraLoginQuerySchema.safeParse(query);
         if (!this.login.enabled) {
             return {
-                url: this.login.errorRedirect('jira_disabled'),
+                url: this.login.errorRedirect('jira_disabled', parsed.success ? parsed.data.mesa : undefined),
                 statusCode: FOUND,
             };
         }
-        const parsed = jiraLoginQuerySchema.safeParse(query);
         if (!parsed.success) {
             throw this.invalidQuery(parsed.error.issues);
         }

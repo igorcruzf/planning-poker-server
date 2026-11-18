@@ -16,7 +16,7 @@ import type { JiraAuthConfig, JiraEnabledConfig } from './jira-auth.config';
 import type { Clock } from './jira-auth.tokens';
 import { JIRA_AUTH_CONFIG, JIRA_CLOCK } from './jira-auth.tokens';
 import { JiraSessionService } from './jira-session.service';
-import { ConsumedNonces, LoginStateSigner } from './login-state';
+import { ConsumedNonces, LoginStateSigner, VerifiedLoginState } from './login-state';
 import { OneTimeStore } from './one-time-store';
 
 export const MAX_PENDING_LOGIN_CODES = 1000;
@@ -31,6 +31,13 @@ const callbackQuerySchema = z.object({
     state: z.string().min(1).max(512).optional(),
     error: z.string().max(256).optional(),
 });
+
+interface VerifiedCallback {
+    query?: z.infer<typeof callbackQuerySchema>;
+    state?: VerifiedLoginState;
+}
+
+const roomLinkParams = (mesa?: string): Record<string, string> => (mesa ? { [ROOM_LINK_QUERY_PARAM]: mesa } : {});
 
 interface IssuedSession {
     blob: string;
@@ -112,10 +119,11 @@ export class JiraLoginService {
     async completeLogin(address: string, query: unknown, cookieHeader?: string): Promise<LoginCompletion> {
         const config = this.requireEnabled();
         const setCookie = clearBindCookie(this.secureCookie(config));
+        const callback = this.verifyCallback(query, cookieHeader);
         if (this.callbackLimiter.consume(address) !== null) {
-            return { url: this.errorRedirect('jira_login_failed'), setCookie };
+            return { url: this.errorRedirect('jira_login_failed', callback.state?.mesa), setCookie };
         }
-        return { url: await this.resolveCallback(query, cookieHeader), setCookie };
+        return { url: await this.resolveCallback(callback), setCookie };
     }
 
     redeemCode(code: string): IssuedSession {
@@ -127,8 +135,8 @@ export class JiraLoginService {
         return issued;
     }
 
-    errorRedirect(error: JiraLoginError): string {
-        return this.frontRedirect({ [JIRA_LOGIN_ERROR_QUERY_PARAM]: error });
+    errorRedirect(error: JiraLoginError, mesa?: string): string {
+        return this.frontRedirect({ ...roomLinkParams(mesa), [JIRA_LOGIN_ERROR_QUERY_PARAM]: error });
     }
 
     sweep(): void {
@@ -136,26 +144,30 @@ export class JiraLoginService {
         this.consumedStates.sweep();
     }
 
-    private async resolveCallback(query: unknown, cookieHeader?: string): Promise<string> {
+    private verifyCallback(query: unknown, cookieHeader?: string): VerifiedCallback {
         const parsed = callbackQuerySchema.safeParse(query);
-        const verified =
-            parsed.success && parsed.data.state
-                ? this.signer!.verify(parsed.data.state, readBindCookie(cookieHeader))
-                : undefined;
-        if (!parsed.success || !verified) {
+        if (!parsed.success) return {};
+        const state = parsed.data.state
+            ? this.signer!.verify(parsed.data.state, readBindCookie(cookieHeader))
+            : undefined;
+        return { query: parsed.data, state };
+    }
+
+    private async resolveCallback({ query, state }: VerifiedCallback): Promise<string> {
+        if (!query || !state) {
             return this.failed('state_invalid');
         }
-        if (!this.consumedStates.consume(verified.nonce, verified.expiresAt)) {
-            return this.failed('state_reused_or_store_full');
+        if (!this.consumedStates.consume(state.nonce, state.expiresAt)) {
+            return this.failed('state_reused_or_store_full', state.mesa);
         }
-        if (parsed.data.error || !parsed.data.code) {
-            return this.failed('consent_denied');
+        if (query.error || !query.code) {
+            return this.failed('consent_denied', state.mesa);
         }
         try {
-            const code = await this.issueLoginCode(parsed.data.code);
-            return code ? this.successRedirect(code, verified.mesa) : this.failed('code_store_full');
+            const code = await this.issueLoginCode(query.code);
+            return code ? this.successRedirect(code, state.mesa) : this.failed('code_store_full', state.mesa);
         } catch (error) {
-            return this.failed('exchange_failed', error);
+            return this.failed('exchange_failed', state.mesa, error);
         }
     }
 
@@ -173,16 +185,13 @@ export class JiraLoginService {
     }
 
     private successRedirect(code: string, mesa?: string): string {
-        return this.frontRedirect({
-            ...(mesa ? { [ROOM_LINK_QUERY_PARAM]: mesa } : {}),
-            [JIRA_LOGIN_CODE_QUERY_PARAM]: code,
-        });
+        return this.frontRedirect({ ...roomLinkParams(mesa), [JIRA_LOGIN_CODE_QUERY_PARAM]: code });
     }
 
-    private failed(reason: string, error?: unknown): string {
+    private failed(reason: string, mesa?: string, error?: unknown): string {
         const cause = error instanceof Error ? ` (${error.name})` : '';
         this.logger.warn(`Jira login failed: ${reason}${cause}`);
-        return this.errorRedirect('jira_login_failed');
+        return this.errorRedirect('jira_login_failed', mesa);
     }
 
     private frontRedirect(params: Record<string, string>): string {
